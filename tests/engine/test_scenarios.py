@@ -5,8 +5,10 @@ from custom_components.cover_automation.engine.model import (
     CoverPersisted,
     CoverState,
     Layer,
+    Mode,
     Owner,
     ReopeningMode,
+    ShadingMode,
     Target,
     WindAction,
 )
@@ -14,8 +16,6 @@ from custom_components.cover_automation.engine.schedule import Profile, QuietHou
 
 from tests.engine.conftest import at, t
 from tests.engine.replay import Sim
-
-ENGINE_CLOSED = CoverPersisted(owner=Owner.ENGINE, engine_target=Target.CLOSED)
 
 CFG = CoverConfig(
     "c", "Bedroom", 180.0, has_door_sensor=True, wind_enabled=True, wind_upper=60.0, wind_lower=50.0
@@ -45,7 +45,9 @@ def test_a_open_against_shading_cloud_and_next_day():
         sim.until("2026-07-01", "16:59")
         assert sim.actual is CoverState.OPEN  # cloud never ends the override
         sim.day(hits=False)  # 17:00 sun leaves -> override ends (sun_hits false)
-        sim.until("2026-07-01", "17:30")
+        # 17:05, not 17:30: at 17:30 the §1.5(d) dwell would have cleared dam anyway,
+        # which would mask a broken §1.5(e).
+        sim.until("2026-07-01", "17:05")
         assert sim.engine.p.dam is None and sim.actual is CoverState.OPEN
         sim.night()
         sim.until("2026-07-02", "09:59")
@@ -58,9 +60,14 @@ def test_a_open_against_shading_cloud_and_next_day():
 def test_b_user_close_then_schedule_and_morning_open():
     sim = Sim(CFG, at("2026-07-01", "13:00"), profile=Profile("p", "p", (CLOSE_2130,)))
     sim.day(hits=False)
-    sim.advance(30)
+    sim.advance(1)
+    assert sim.actual is CoverState.CLOSED  # yesterday's hold, as in scenario i
+    sim.manual(CoverState.OPEN)  # releases the hold (decision 22)
+    sim.until("2026-07-01", "13:40")
+    assert sim.engine.p.dam is None  # §1.5(d) dwell ended the override toward closed
     sim.until("2026-07-01", "14:00")
-    sim.manual(CoverState.CLOSED)  # engine wanted open
+    sim.manual(CoverState.CLOSED)  # engine wanted open: real user close
+    assert sim.engine.p.dam is Target.OPEN
     sim.day(hits=True)
     sim.until("2026-07-01", "18:00")
     sim.day(hits=False)
@@ -79,6 +86,36 @@ def test_b_user_close_then_schedule_and_morning_open():
     sim.day(hits=False)
     sim.until("2026-07-02", "18:30")
     assert sim.actual is CoverState.OPEN  # and it reopens: the hold did not re-arm
+
+
+def test_b_active_mode_reopens_user_closed_cover_after_dwell():
+    """Same body as scenario b up to 20:00, but reopening=active.
+
+    Proves scenario b's 20:00 assertion is decided by gate 6 and not by something
+    else: the override toward open is gone by 14:31 (§1.5(d) dwell), so at 18:00,
+    when the sun leaves, only the reopening mode separates the two outcomes.
+    """
+    sim = Sim(
+        CFG,
+        at("2026-07-01", "13:00"),
+        profile=Profile("p", "p", (CLOSE_2130,)),
+        reopening=ReopeningMode.ACTIVE,
+    )
+    sim.day(hits=False)
+    sim.advance(1)
+    assert sim.actual is CoverState.CLOSED
+    sim.manual(CoverState.OPEN)
+    sim.until("2026-07-01", "13:40")
+    assert sim.engine.p.dam is None
+    sim.until("2026-07-01", "14:00")
+    sim.manual(CoverState.CLOSED)
+    assert sim.engine.p.dam is Target.OPEN
+    sim.day(hits=True)
+    sim.until("2026-07-01", "18:00")
+    assert sim.engine.p.dam is None  # dwell ended the override while the sun was on
+    sim.day(hits=False)
+    sim.until("2026-07-01", "20:00")
+    assert sim.actual is CoverState.OPEN  # active reopens what passive leaves closed
 
 
 def test_c_wind_under_hold_with_quiet_hours_recloses_at_release():
@@ -118,9 +155,9 @@ def test_e_frost_then_wind_then_release():
     sim = Sim(
         CFG,
         at("2026-01-10", "08:00"),
+        actual=CoverState.CLOSED,
         persisted=CoverPersisted(owner=Owner.ENGINE, engine_target=Target.CLOSED),
     )
-    sim.actual = CoverState.CLOSED
     sim.frost = True
     sim.wind_active = True
     sim.advance(30)
@@ -166,9 +203,9 @@ def test_g_single_open_rule_does_not_suppress_shading():
         CFG,
         at("2026-07-01", "05:00"),
         profile=profile,
+        actual=CoverState.CLOSED,
         persisted=CoverPersisted(owner=Owner.ENGINE, engine_target=Target.CLOSED),
     )
-    sim.actual = CoverState.CLOSED
     sim.day(hits=False)
     sim.until("2026-07-01", "05:31")
     assert sim.actual is CoverState.OPEN
@@ -219,6 +256,43 @@ def test_i_sun_relative_rule_clamped_before_quiet_hours():
     assert sim.actual is CoverState.CLOSED
 
 
+def test_j_forced_all_with_dark_only_closes_at_sunrise_and_never_reopens():
+    sim = Sim(
+        CFG,
+        at("2026-07-01", "04:00"),
+        shading_mode=ShadingMode.FORCED_ALL,
+        persisted=CoverPersisted(
+            owner=Owner.ENGINE, engine_target=Target.OPEN, mode=Mode.DARK_ONLY
+        ),
+    )
+    sim.night()
+    sim.advance(60)
+    assert sim.actual is CoverState.OPEN
+    sim.day(hits=False)  # sun up: forced_all wants shade regardless of sun_hits
+    sim.advance(5)
+    assert sim.actual is CoverState.CLOSED
+    sim.shading_mode = ShadingMode.AUTO  # hub back to auto: dark_only never opens
+    sim.advance(60)
+    assert sim.actual is CoverState.CLOSED
+    sim.night()
+    sim.until("2026-07-02", "06:00")
+    assert sim.actual is CoverState.CLOSED
+
+
+def test_j2_forced_all_does_nothing_for_protection_only():
+    sim = Sim(
+        CFG,
+        at("2026-07-01", "06:00"),
+        shading_mode=ShadingMode.FORCED_ALL,
+        persisted=CoverPersisted(
+            owner=Owner.ENGINE, engine_target=Target.OPEN, mode=Mode.PROTECTION_ONLY
+        ),
+    )
+    sim.day(hits=True)
+    sim.advance(60)
+    assert sim.actual is CoverState.OPEN and sim.commands == []
+
+
 def test_k_user_stop_at_partial_is_respected_until_override_ends():
     sim = Sim(CFG, at("2026-07-01", "12:00"), travel_s=120)
     sim.day(hits=True)
@@ -238,7 +312,7 @@ def test_l_room_hot_flap_is_damped_by_min_interval():
     for minute in range(60):
         sim.room_hot = (minute // 5) % 2 == 0  # flips every 5 minutes
         sim.advance(1)
-    assert len(sim.commands) <= 7  # at most one move per min_move_interval (10 min)
+    assert 2 <= len(sim.commands) <= 7  # it does move, but at most once per 10 min
 
 
 def test_n1_close_rule_release_is_sticky():
@@ -265,8 +339,18 @@ def test_n4_shading_send_does_not_clear_unrelated_override():
     assert sim.engine.p.dam is Target.OPEN
     sim.until("2026-07-02", "09:00")
     sim.day(hits=False)
-    sim.advance(60)
-    assert sim.actual is CoverState.CLOSED  # override toward open blocks reopening (passive too)
+    sim.open_door()  # door bypasses the override: the manual move predates it (decision 15)
+    sim.advance(1)
+    assert sim.actual is CoverState.OPEN and sim.engine.p.dam is Target.OPEN  # dec. 18
+    sim.close_door()
+    sim.until("2026-07-02", "11:00")
+    sim.day(hits=True)  # shading closes: a send with target != dam leaves dam intact
+    sim.until("2026-07-02", "11:15")
+    assert sim.actual is CoverState.CLOSED and sim.commands[-1][2] is Layer.SHADING
+    assert sim.engine.p.dam is Target.OPEN
+    sim.day(hits=False)  # sun leaves: shading wants open == dam -> suppressed
+    sim.until("2026-07-02", "12:00")
+    assert sim.actual is CoverState.CLOSED
 
 
 def test_n5_open_rule_then_shading_is_interval_damped():
@@ -275,9 +359,9 @@ def test_n5_open_rule_then_shading_is_interval_damped():
         CFG,
         at("2026-07-01", "06:50"),
         profile=profile,
+        actual=CoverState.CLOSED,
         persisted=CoverPersisted(owner=Owner.ENGINE, engine_target=Target.CLOSED),
     )
-    sim.actual = CoverState.CLOSED
     sim.day(hits=True)
     sim.until("2026-07-01", "07:05")
     assert sim.actual is CoverState.OPEN

@@ -12,7 +12,6 @@ from custom_components.cover_automation.engine.model import (
     CoverInputs,
     CoverPersisted,
     CoverState,
-    Desired,
     DoorState,
     HubSignals,
     Layer,
@@ -67,6 +66,8 @@ class Sim:
         self.engine = CoverEngine(self.cfg, self.persisted)
         self.now = self.start
         self._last_rule_check = self.start
+        # Spec §5 setup order: reconcile runs once before the first evaluation.
+        self.engine.reconcile(self.actual, None, self.now)
 
     # -- environment -------------------------------------------------------------
 
@@ -186,6 +187,8 @@ class Sim:
                 door=self.door,
                 door_last_changed=self.door_changed,
                 sun_hits=self.sun_hits,
+                room_cold=self.room_cold,
+                room_hot=self.room_hot,
                 wind_active=self.wind_active,
                 schedule=view,
             ),
@@ -202,12 +205,3 @@ class Sim:
             ),
         )
         self.engine.reconcile(self.actual, first.decision, self.now)
-
-    # -- assertions ------------------------------------------------------------
-
-    def commands_since(self, when: datetime) -> list[tuple[datetime, Target, Layer]]:
-        return [c for c in self.commands if c[0] >= when]
-
-    def last_desired(self) -> Desired:
-        assert self.engine.rt.last_evaluation is not None
-        return self.engine.rt.last_evaluation.desired
