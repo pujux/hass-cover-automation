@@ -28,8 +28,6 @@ def is_settled(state: CoverState) -> bool:
 
 def is_contrary(state: CoverState, target: Target) -> bool:
     """Only the opposite end state is contrary (spec §1.0)."""
-    return (
-        (state is CoverState.OPEN
-        and target is Target.CLOSED)
-        or (state is CoverState.CLOSED and target is Target.OPEN)
+    return (state is CoverState.OPEN and target is Target.CLOSED) or (
+        state is CoverState.CLOSED and target is Target.OPEN
     )
