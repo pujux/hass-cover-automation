@@ -22,3 +22,9 @@ consolidate these; until then this file is the source of truth.
 | 15 | Door vs earlier manual close | A door-open request bypasses an override whose manual move predates the door's last opening. Manual moves made while the door is open are respected. |
 | 16 | Frost vs door | Frost wins: door-open request cannot move a cover while frost is active; notification + repair issue, as for wind. |
 | 17 | Runtime state storage | Per-cover `enabled` and `mode` and the hub selects/switches live in the Store (engine owns state; entities are views), not RestoreEntity. |
+| 18 | Which sends clear an override | Only **schedule**-layer sends clear `dam` (schedules are authoritative). Wind and door sends bypass the override for the episode but leave it intact; shading sends never clear it. Refines decision 12(c). |
+| 19 | Frost unknown vs wind | `frost = unknown` (source unavailable beyond grace) blocks door, schedule and shading moves but not wind protection, unless the last known outdoor temperature was ≤ threshold + 1 K. Refines decision 16 for the unknown case. |
+| 20 | Ownership at send time | `owner = engine` is written when a command is **sent**, not when it is confirmed. Reconcile with `actual == engine_target` changes nothing. |
+| 21 | Min interval clock | The minimum interval blocks only shading-layer moves, but its clock is updated by every engine command on the cover (prevents open-rule → shading and wind-release → shading flaps). |
+| 22 | Close-rule release | A close rule's hold is released by `manual_move_at > fire time` alone (no `owner` conjunct), so the release is sticky until the next rule. |
+| 23 | Sun-relative rules in quiet hours | Clamped to the quiet-hours boundary (close → 1 min before start, open → end) instead of skipped; skipped with a repair issue only if no valid clamp exists. |
