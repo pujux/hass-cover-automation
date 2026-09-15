@@ -1,9 +1,8 @@
 # Cover Automation Integration — Design Spec
 
-Date: 2026-09-15. Status: approved section by section in brainstorming; awaiting final review.
-Related: `docs/design-decisions.md` (decision log), `docs/feature-selection.md` (chosen
-features), `docs/reference/smart-cover-automation-analysis.md` (analysis of the integration
-being replaced).
+Date: 2026-09-15. Revision 2 (after two independent reviews, see `docs/reviews/`).
+Related: `docs/design-decisions.md` (decision log, #1–#17), `docs/feature-selection.md`,
+`docs/reference/smart-cover-automation-analysis.md`.
 
 ## 0. Scope
 
@@ -12,267 +11,425 @@ covers to **fully open or fully closed only** based on sun position, weather for
 temperature, wind, frost, door sensors and per-cover schedule profiles. Event-driven.
 Per-cover configuration through config subentries. Transparent through per-cover status
 entities, logbook entries, repairs and diagnostics. Single hub instance per Home Assistant.
+**Minimum Home Assistant 2026.8** (decision 11).
 
 **Non-goals:** tilt/slat control; intermediate positions or sun-tracking positions;
 lux/irradiance sensors; presence; rain or hail logic; workday/calendar schedules;
-translations beyond English (may follow later); multiple hub instances.
+translations beyond English; multiple hub instances; integration-provided automation
+triggers/conditions (mature in 2026.8 but not selected; the event model in §4 does not
+preclude adding a `trigger.py` later).
 
-## 1. Layer stack
+## 1. Decision model
 
-Every relevant event triggers one evaluation per cover. The evaluation walks the layers
-top to bottom; the first layer with an opinion sets the **desired state** — `closed`,
-`open`, or `leave_alone` — plus a reason. An **act gate** then decides whether the engine
-may make the actual state match the desired state now.
+### 1.0 Vocabulary
 
-Per-cover **mode select**: `auto` | `dark_only` | `protection_only`.
-Per-cover **enable switch**: full kill switch above everything, including protection
-(intended for maintenance).
+- **Actual state** of a cover, classified from the HA state object:
+  `closed` if HA state is `closed` or `current_position ≤ tolerance`;
+  `open` if HA state is `open` and (`current_position ≥ 100 − tolerance` or no position
+  attribute); `moving` while HA state is `opening`/`closing`; `cover_unavailable` when
+  `unavailable`/`unknown`; `partial` otherwise. Tolerance = hub `open_closed_tolerance`
+  (default 5 %). Only **changes of the classified state** are events; a raw change that
+  does not change the classification (e.g. 100 → 97) is ignored.
+- **Desired state**: the output of the layer stack for one cover in one evaluation:
+  `closed`, `open`, or `leave_alone`, plus the winning layer and a reason.
+- **Per-cover persisted state** (§5): `owner` (engine|user), `engine_target`
+  (open|closed|null), `manual_move_at`, `desired_at_manual_move` ("dam", open|closed|null),
+  `wind_active`, `enabled`, `mode`.
+- **Engine owns the current state** ⇔ `owner == engine AND engine_target == actual`.
+- **Override active** ⇔ `dam ≠ null`. An override blocks engine commands whose target
+  equals `dam` (§1.3 gate 5); its lifecycle is §1.5.
 
-Layers in precedence order:
+### 1.1 Modes and the enable switch
 
-1. **Frost.** Outdoor temperature below the frost threshold (default 0 °C; released at
-   threshold + 1 K) → `leave_alone` for every cover. Evaluation continues for status only.
-   If the wind layer would want a cover open while frost is active, raise a persistent
-   notification and a repair issue for that cover.
-2. **Wind.** Wind value ≥ the cover's upper threshold → protection active. It releases
-   once the value has stayed below the cover's lower threshold for the hold time.
-   Opinion: `open`, or `leave_alone` if the cover's wind action is `hold`. Ignores
-   overrides, doors, schedules and quiet hours.
-3. **Door.** Door sensor `on` → `open`. Nothing below this layer may close a cover on an
-   open door.
-4. **Quiet hours** (from the cover's schedule profile) → `leave_alone`.
-5. **Schedule hold.** A profile rule that has fired and is not yet superseded by the next
-   rule, nor released by a manual move on this cover → `closed` or `open` per the rule.
-6. **Shading** — only in mode `auto` or `dark_only`, and only when the hub shading mode
-   is not `off`.
-   `want_shade = sun_hits AND sunny AND NOT room_cold AND (hot_day OR room_hot)`
-   (default rule `forecast_with_room`; per-cover alternatives: `room_only` =
-   `sun_hits AND sunny AND room_hot`; `either` = `sun_hits AND sunny AND (hot_day OR
-   room_hot)` without the comfort floor).
-   Hub shading mode `forced_sunlit` → `want_shade = sun_hits`;
-   `forced_all` → `want_shade = sun elevation within the cover's elevation range`.
-   Mode `auto`: `closed` if want_shade else `open`.
-   Mode `dark_only`: `closed` if want_shade else `leave_alone`.
+Per-cover **enable switch** off: the engine never commands the cover, no timers run for it,
+status is `disabled`. Classified transitions are still recorded as manual moves without
+creating overrides (`dam` stays null), so re-enabling starts from a consistent ownership.
+
+Per-cover **mode select** decides which layers are consulted:
+
+| Mode | Frost | Wind | Door | Quiet hours | Schedule | Shading |
+|---|---|---|---|---|---|---|
+| `auto` | ✓ | ✓ | ✓ | ✓ | ✓ | closed / open |
+| `dark_only` | ✓ | ✓ | ✓ | ✓ | ✓ | closed only (never opens) |
+| `protection_only` | ✓ | ✓ | ✓ | – | – | – |
+
+### 1.2 Layer stack
+
+Every relevant event (§2) triggers one evaluation per cover. Layers are walked top to
+bottom; the first layer with an opinion sets the desired state.
+
+1. **Frost.** `frost_active` (§2) → `leave_alone` for every cover. `frost = unknown`
+   (source unavailable beyond grace) → `leave_alone` as well, but see gate 2: wind and
+   door requests are still evaluated for notification purposes only. If wind or door would
+   want a cover open while frost is active or unknown, raise a persistent notification and
+   a repair issue for that cover (decisions 6, 16).
+2. **Wind.** `wind_active` for this cover (§2) → `open`, or `leave_alone` if the cover's
+   `wind_action` is `hold`. Wind ignores overrides, doors, schedules, quiet hours and the
+   minimum interval. When wind releases for a cover and the layers below then want a state
+   different from actual, that single **restoring move** is exempt from quiet hours.
+3. **Door.** Door sensor `on` → `open`. Door sensor `unavailable`/`unknown` →
+   `leave_alone` (never close on a dead sensor; never force open either) plus a repair
+   issue. Nothing below this layer may close a cover on an open door.
+4. **Quiet hours** (from the cover's profile) → `leave_alone`.
+5. **Schedule** (decision 13). Two rule kinds:
+   - A **close rule** that fired at T holds `closed` until the next rule of the profile
+     fires, or until released by a manual move (`owner == user AND manual_move_at > T`).
+   - An **open rule** that fired at T yields `open` until the cover's actual state is `open`,
+     until the next rule fires, or until released by a manual move; afterwards the layers
+     below govern.
+   - Any rule firing clears `dam` for every cover of the profile (schedules are authoritative,
+     decision 10), even when the desired state does not change.
+   - Two consecutive close rules are legal and act as a re-close (documented escape hatch).
+   - A rule whose time falls inside its own profile's quiet hours is rejected at config time;
+     a sun-relative rule that drifts into quiet hours on a given day is skipped that day and
+     raises a repair issue.
+6. **Shading** (decision 14) — only while sun elevation > 0, mode `auto` or `dark_only`,
+   hub shading mode ≠ `off`. Otherwise `leave_alone`.
+   Per-cover `shading_rule`:
+   - `forecast_with_room` (default): `want_shade = sun_hits AND sunny AND NOT room_cold
+     AND (hot_day OR room_hot)`
+   - `room_only`: `want_shade = sun_hits AND sunny AND room_hot` (requires a room sensor;
+     rejected at config time otherwise)
+   - `either`: `want_shade = sun_hits AND sunny AND (hot_day OR room_hot)`
+   Hub shading mode `forced_sunlit` → `want_shade = sun_hits`; `forced_all` →
+   `want_shade = elevation within the cover's range`. Forced modes bypass the comfort floor
+   by design. If any input the rule needs is `unknown` (sunny, hot_day, frost), the layer
+   yields `leave_alone`.
+   `auto`: `closed` if want_shade else `open`. `dark_only`: `closed` if want_shade else
+   `leave_alone`.
 7. **Default** → `leave_alone`.
 
-**Act gate** — applied when desired is `open` or `closed` and differs from actual:
+### 1.3 Act gate
 
-1. Frost active → never move.
-2. Desired comes from the wind layer → move immediately.
-3. Manual override active → do not move. (Definition in §1.2.)
-4. Reopening mode (hub select, default `passive`):
-   `passive` → send `open` only if the engine owns the current state, or the request
-   comes from the schedule or door layer. `active` → open regardless. `off` → never open
-   for shading reasons.
-5. Minimum interval between engine moves, per cover, applies to **shading-layer moves
-   only**; if too soon, schedule a re-evaluation at the earliest allowed time.
-6. Simulation mode → log the command instead of sending it.
+Evaluated when desired ∈ {open, closed} and desired ≠ actual. Produces `send`, `defer(t)`
+or `suppress`, in this order:
 
-### 1.1 Actual state and transition classification
+1. Cover disabled → suppress.
+2. Frost active or unknown → suppress (if the request came from wind or door: notification
+   + repair issue, once per episode).
+3. Desired from the **wind** layer → send.
+4. Desired from the **door** layer → if an override is active and `manual_move_at` is
+   later than the door sensor's `last_changed`, suppress (manual move while the door was
+   open is respected, decision 15); otherwise send. Door moves ignore the minimum interval.
+5. Override active and command target == `dam` → suppress.
+6. Desired `open` from the **shading** layer, by hub reopening mode: `passive` (default) →
+   send only if the engine owns the current state; `active` → send; `off` → suppress.
+   Schedule-layer opens are not subject to reopening mode (schedules are authoritative).
+7. Actual is `moving` → defer until settled.
+8. Shading-layer moves only: minimum interval since the last **shading-layer** command
+   for this cover (`min_move_interval`, default 10 min) → defer to the earliest allowed time.
+9. Command backoff timer active for this cover (§5) → defer.
+10. Simulation mode → log the command, fire the logbook event with `simulated: true`,
+    register **no** pending command, do not touch `engine_target`. Applies to every layer,
+    wind included.
+11. Send the command. Feature check: use `cover.open_cover`/`cover.close_cover` when the
+    cover advertises `OPEN`/`CLOSE`; otherwise `cover.set_cover_position` with 100/0
+    (still only the two end positions, decision 2); a cover supporting neither raises a
+    repair issue at config time.
 
-Actual state of a cover: `closed` if HA state is `closed` or position ≤ tolerance;
-`open` if HA state is `open` and position ≥ 100 − tolerance (or no position attribute);
-`partial` otherwise; `moving` while HA state is `opening`/`closing` (no classification
-until settled); `unavailable` when unavailable/unknown.
+### 1.4 Commands, pending records and transition classification
 
-Every settled cover state change is matched against a pending engine command:
-- **Match** → the engine owns the new state (`owner = engine`, `engine_target` = state).
-- **No match** → manual move: `owner = user`, `manual_move_at = now`,
-  `desired_at_manual_move = current desired` (or `null` when desired is `leave_alone`).
-  Any schedule hold on that cover is thereby released (see §1.3). `partial` counts as a
-  manual state that is neither open nor closed.
+**On send:** write `engine_target = target`, create a pending record `{target, sent_at}`,
+clear `dam` (the engine has taken control), flush the Store immediately, record the send
+time for the layer's interval bookkeeping.
 
-### 1.2 Manual override
+**While a pending record exists:**
+- classified state reaches `target` → **match**: `owner = engine`, pending cleared;
+- a settled classified state contrary to the target persists ≥ 10 s → **manual move**
+  (below), pending cleared;
+- the confirm window expires (`confirm_window`, per cover, default 120 s) → status
+  `unconfirmed`, pending cleared, backoff started (§5).
 
-An override is active exactly when
-`owner == user AND desired ∈ {open, closed} AND desired == desired_at_manual_move AND actual ≠ desired`.
+**Without a pending record:** any classified state change is a manual move.
 
-Consequences: the override ends automatically as soon as the desired state changes
-(decision 5); while desired is `leave_alone` the override status is frozen; a passing
-cloud does not end it because debounce keeps desired stable.
+**Manual move:** `owner = user`; `manual_move_at = now`; `dam` is set from the **last
+completed evaluation** (decision: order pinned, BLOCKER 2): if that desired ∈ {open,
+closed} → `dam = that desired`; else if the new actual ∈ {open, closed} → `dam = inverse
+of the new actual`; else (`partial`) → `dam = null`. `engine_target` is left unchanged.
+Any schedule hold on the cover is released per §1.2 layer 5. Manual moves are recorded
+while the cover is disabled, but with `dam = null`.
 
-Two explicit clears:
-- **Schedule rule fires** → `desired_at_manual_move = null` for every cover in that
-  profile. Schedules are authoritative even when the desired *state* does not change,
-  only the reason (e.g. user opened at 20:00 against shading; rule closes at 21:30).
-- **Reset button / service** → `owner = engine`, `engine_target = actual`,
-  `desired_at_manual_move = null`. The engine may then act on the next evaluation.
+`partial` is a manual state that is neither open nor closed. While actual is `partial` and
+an override is active, the engine waits; once the override ends (§1.5) the engine may
+command the cover. Status shows `partial`.
 
-### 1.3 Schedule hold and release
+### 1.5 Override lifecycle (decision 12)
 
-A rule holds from its fire time until the next rule of the profile fires. It is
-**released** for a cover when `owner == user AND manual_move_at > rule fire time`.
-A released cover is governed by the layers below the schedule layer until the next rule.
+An override begins when a manual move sets `dam ≠ null`. It **ends** (`dam = null`) when
+any of the following happens:
 
-### 1.4 Approved defaults
+a. a schedule rule of the cover's profile fires;
+b. reset (button or service): `owner = engine`, `engine_target = actual` if actual ∈ {open,
+   closed} else null, `dam = null`;
+c. the engine sends a command to the cover (door, wind, schedule);
+d. the desired state has been ∈ {open, closed} and ≠ `dam` **continuously** for the override
+   dwell (hub `override_dwell`, default 30 min). `leave_alone` pauses the dwell timer; a
+   return to `dam` resets it. The timer is runtime-only and restarts after a restart;
+e. for an override created while the shading layer was the winning layer: `sun_hits`
+   becomes false for that cover.
 
-Reopening mode `passive`. Door above quiet hours (a terrace door opened at night lifts
-its cover). Min interval exempts wind, door and schedule moves.
+An override does not end merely because desired changed; that is what makes a passing
+cloud harmless regardless of its length. `manual_override` sensor `since` =
+`manual_move_at`.
+
+### 1.6 Confirmed defaults
+
+Reopening mode `passive`. Door above quiet hours. Frost above wind above door.
+Min interval exempts wind, door and schedule moves and is measured from the last
+shading-layer command.
 
 ## 2. Inputs and signal processing
 
-- **Sun hits window** (per cover): azimuth inside [az − tol_left, az + tol_right] and
-  elevation inside [elev_min, elev_max]. Hysteresis: on only when strictly inside on both
-  axes; off only when outside by the margin (default 2°) on either axis. Source: `sun.sun`
-  attributes, which HA updates adaptively. No own astronomy for this.
-- **Sunny**: weather entity condition ∈ configurable set (default `sunny`,
-  `partlycloudy`), debounced: on after continuously true for the on-delay (default
-  10 min), off after continuously false for the off-delay (default 20 min). Weather entity
-  unavailable longer than the grace period (default 30 min) → sunny = unknown → shading
-  layer yields `leave_alone`.
-- **Hot day**: daily forecast (`weather.get_forecasts`, type daily) fetched at startup,
-  hourly, and after a weather entity state change (throttled). Within the local day,
-  today's max only rises and today's min only falls; both persisted.
-  `hot_day = max ≥ high threshold (24 °C) AND (low threshold disabled OR min ≥ low
-  threshold (13 °C))`.
-- **Override entities**: optional `sunny_override_entity` and `hot_override_entity` in
-  the hub config; if set, their on/off state replaces the computed value.
-- **Room temperature** (per cover, optional sensor): `room_cold = temp < floor`
-  (default 21 °C); `room_hot = temp ≥ ceiling` (default 25 °C); 0.5 K hysteresis on
-  both. Sensor unavailable → neither cold nor hot; status shows `degraded`.
-- **Wind**: one hub sensor (speed or gust, any unit; thresholds are entered in that
-  unit). Per cover: `wind_enabled`, upper, lower, hold time (default 15 min), action
-  `open` | `hold`. Sensor unavailable → protection state frozen + repair issue.
-- **Frost**: outdoor temperature from a sensor entity or the weather entity's
-  `temperature` attribute. Threshold default 0 °C, release at +1 K.
+All timers use HA helpers: `async_track_time_change` for local midnight and daily
+recomputation of sun-relative rule times (DST-correct); `async_call_later` for debounce,
+dwell, wind hold, min-interval retry, command retry and confirm windows (relative,
+DST-immune); `async_track_point_in_time` only for the next schedule rule, recomputed at
+midnight and on `EVENT_CORE_CONFIG_UPDATE`. A fixed-time rule falling into a skipped DST
+hour fires at the first valid minute after it; in a repeated hour it fires once.
+
+- **Sun hits window** (per cover): `signed_diff = (sun_az − cover_az + 180) mod 360 − 180`;
+  inside ⇔ `−tol_left < signed_diff < tol_right AND elev_min ≤ elevation ≤ elev_max`.
+  Hysteresis: on when strictly inside on both axes; off when outside by the release margin
+  (default 2°) on either axis, except that the elevation lower bound never releases below
+  the horizon (with `elev_min = 0`, off at elevation ≤ 0). Source: `sun.sun` attributes
+  (HA updates them every 2–4 min in daylight). Seed at startup/reload with the strict test.
+  The margin is a release margin, not chatter protection; chatter protection is the sunny
+  debounce.
+- **Sunny**: weather condition ∈ configurable set (default `sunny`, `partlycloudy`),
+  debounced: on after continuously true for `sunny_on_delay` (10 min), off after
+  continuously false for `sunny_off_delay` (20 min). Seeded at startup from the current
+  condition as already settled. `unknown` until the weather entity has reported, and after
+  it has been unavailable longer than `weather_grace` (30 min); unknown → shading yields
+  `leave_alone`.
+- **Hot day**: daily forecast via `weather.get_forecasts` (`type: daily`,
+  `blocking=True, return_response=True`) at startup, hourly, and after a weather entity
+  change (throttled to once per 10 min). "Today" = first entry whose `datetime` falls on the
+  local calendar day. Within the local day the stored max only rises and the stored min only
+  falls; the **flag** `hot_day` latches true until local midnight once true. `hot_day =
+  unknown` until the first successful fetch of the new local day; a failed or empty fetch
+  keeps the previous values and raises the weather repair issue after the grace period.
+  `hot_day = max ≥ hot_high AND (NOT hot_low_enabled OR min ≥ hot_low)`.
+- **Override entities**: optional `sunny_override_entity`, `hot_override_entity`; if set,
+  their on/off replaces the computed value (unavailable → unknown).
+- **Room temperature** (per cover, optional): `room_cold = temp < comfort_floor`,
+  `room_hot = temp ≥ comfort_ceiling`, 0.5 K hysteresis and a 10-minute dwell on both
+  transitions. Unavailable → neither cold nor hot, status attribute `degraded`.
+  `room_only` covers with an unavailable sensor are not shaded and raise a repair issue.
+- **Wind**: one hub sensor (speed or gust). Per cover: `wind_enabled`, `wind_upper`,
+  `wind_lower`, `wind_hold` (15 min), `wind_action` (open|hold). Activation at value ≥
+  upper; release after value < lower continuously for the hold time. Sensor unavailable →
+  `wind_active` frozen at its last value + repair issue.
+- **Frost**: outdoor temperature from a sensor or the weather entity's `temperature`
+  attribute. `frost_active` at ≤ threshold (default 0 °C), release at > threshold + 1 K.
+  Source unavailable → last value held for `weather_grace`, then `unknown` (§1.2 layer 1).
+- **Units**: every threshold is stored together with the unit it was entered in and converted
+  at read time to the source entity's current unit using HA's unit converters; the weather
+  entity's `temperature_unit` attribute is the source unit for forecast and outdoor
+  temperature. Number selectors display the source entity's unit. A wind sensor whose unit
+  changes after configuration raises a repair issue.
 - **Evaluation triggers**: state changes of covers, door sensors, room sensors, wind,
   outdoor temperature, weather entity, `sun.sun`, override entities, runtime control
-  entities. Timers: debounce expiry, wind hold expiry, next schedule rule, min-interval
-  retry, local midnight rollover, 5-minute fallback tick. Sunrise/sunset-relative rule
-  times recomputed once per local day.
+  entities; timers listed above; local midnight rollover; 5-minute fallback tick.
 
 ## 3. Configuration model
 
-One **hub config entry** (`single_config_entry`) + two **config subentry types**, each
-with create and reconfigure flows.
+One **hub config entry** (`single_config_entry: true`) + two **config subentry types**
+(`cover`, `profile`), each with create and reconfigure flows.
 
-**Hub entry** (two-step config flow; options editable later):
-`weather_entity` (required, domain weather); `wind_sensor` (optional; absent → wind layer
-disabled and wind fields hidden in cover subentries); `outdoor_temperature_source`
-(sensor entity; default = weather entity temperature attribute); `frost_threshold`
-(0 °C); `sunny_conditions` (default sunny, partlycloudy); `sunny_on_delay` (10 min);
-`sunny_off_delay` (20 min); `weather_grace` (30 min); `hot_high_threshold` (24 °C);
-`hot_low_threshold` (13 °C) + `hot_low_enabled` (true); `sunny_override_entity`,
-`hot_override_entity` (optional); `sun_hysteresis_margin` (2°); `open_closed_tolerance`
-(5 %).
+**Reload mechanism (single rule):** one update listener on the entry calls
+`hass.config_entries.async_schedule_reload`. Every hub and subentry flow step ends with
+`async_update_and_abort`; `async_update_reload_and_abort` and `OptionsFlowWithReload` are
+never used (they conflict with update listeners; the hub variant breaks in 2026.12).
+Subentry add/update/remove all notify the same listener.
 
-**Cover subentry** (one per cover; creates its own device linked `via_device` to the hub
-device): `cover_entity` (required); `name` (default: cover friendly name); `azimuth`
-(0–359); `tolerance_left`, `tolerance_right` (default 60°); `elevation_min` (0°),
-`elevation_max` (90°); `shading_rule` (`forecast_with_room` | `room_only` | `either`);
-`room_temperature_sensor` (optional); `comfort_floor` (21 °C); `comfort_ceiling`
-(25 °C); `door_sensor` (optional, binary_sensor); `wind_enabled`; `wind_upper`;
-`wind_lower`; `wind_hold` (15 min); `wind_action` (`open` | `hold`); `schedule_profile`
-(reference to a profile subentry id, optional); `min_move_interval` (10 min).
-Mode and enabled are runtime entities, not subentry data.
+**Devices (2026.8 registry rules):** created explicitly in `async_setup_entry` before
+platforms are forwarded. Hub device: `identifiers={(DOMAIN, entry.entry_id)}`,
+`config_subentry_id=None`, `entry_type=SERVICE`. One device per cover subentry:
+`identifiers={(DOMAIN, subentry_id)}`, `config_subentry_id=subentry_id`,
+`via_device_id=<hub device id>` (never the deprecated `via_device`). Hub entities are added
+without a subentry id; per-cover entities with their subentry id; a hub entity never declares
+a cover device. Device lookups are always `config_entry_id`-scoped. Deleting a cover
+subentry removes its device and entities automatically.
 
-**Schedule profile subentry**: `name`; `rules` — a list (UI exposes up to 4 slots for
-now), each `{action: close|open, time_mode: fixed|sunrise|sunset, time (fixed) or
+**Hub entry** (two-step config flow; hub options editable later):
+`weather_entity` (required; must support daily forecasts, validated); `wind_sensor`
+(optional; absent → wind layer disabled and wind fields omitted from cover subentries);
+`outdoor_temperature_source` (sensor entity; default = weather entity temperature
+attribute); `frost_threshold` (0 °C); `sunny_conditions`; `sunny_on_delay` (10 min);
+`sunny_off_delay` (20 min); `weather_grace` (30 min); `hot_high` (24 °C); `hot_low`
+(13 °C) + `hot_low_enabled` (true); `sunny_override_entity`, `hot_override_entity`
+(optional); `sun_release_margin` (2°); `open_closed_tolerance` (5 %); `override_dwell`
+(30 min).
+
+**Cover subentry** (one per cover): `cover_entity` (required; must support OPEN+CLOSE or
+SET_POSITION); `name` (default: cover friendly name); `azimuth` (0–359); `tolerance_left`,
+`tolerance_right` (60°); `elevation_min` (0°), `elevation_max` (90°); `shading_rule`
+(`forecast_with_room` | `room_only` | `either`); `room_temperature_sensor` (optional;
+required for `room_only`); `comfort_floor` (21 °C) < `comfort_ceiling` (25 °C);
+`door_sensor` (optional); wind block only if the hub has a wind sensor: `wind_enabled`,
+`wind_upper` > `wind_lower`, `wind_hold` (15 min), `wind_action` (open|hold);
+`schedule_profile` (select over `entry.get_subentries_of_type("profile")`, value =
+`subentry_id`, plus an explicit "none"); `min_move_interval` (10 min); `confirm_window`
+(120 s). Enabled and mode are runtime state (§5), not subentry data.
+
+**Schedule profile subentry**: `name`; `rules` stored as a list, presented as four collapsed
+sections `rule_1`…`rule_4` with all fields optional and cross-field validation in the step
+handler: `{action: close|open, time_mode: fixed|sunrise|sunset, time (fixed) or
 offset_minutes (sun-relative), earliest?, latest? (clamps for sun-relative rules)}`;
-optional `quiet_hours {start, end}` (may span midnight).
+optional `quiet_hours {start, end}` (may span midnight). Validation: rule times outside
+quiet hours; `fixed` requires `time`, sun-relative requires `offset_minutes`.
 
-Renaming a cover entity does not lose settings (the subentry is the identity; update the
-entity field in its reconfigure flow). Entry data carries `version`/`minor_version`;
-migrations run once via `async_migrate_entry`. Deleting a profile still referenced by a
-cover raises a repair issue; that cover behaves as if it had no profile.
+**Entity references** (`cover_entity`, `door_sensor`, `room_temperature_sensor`, hub
+sensors) are followed automatically: the integration subscribes to
+`EVENT_ENTITY_REGISTRY_UPDATED` and rewrites the stored entity id when `old_entity_id`
+matches. Entry data carries `version`/`minor_version`; migrations run once via
+`async_migrate_entry`. A cover referencing a deleted profile behaves as if it had none and
+raises a repair issue.
 
 ## 4. Entities, services, observability
 
-**Hub device:** select `shading_mode` (off | auto | forced_sunlit | forced_all; default
-auto); select `reopening_mode` (active | passive | off; default passive); switch
-`simulation_mode`; switch `verbose_logging` (sets integration logger to DEBUG while on);
-diagnostic binary sensors `hot_day`, `sunny` (debounced), `frost_active`,
-`any_wind_protection_active`, `problem` (on while any repair issue of this integration is
-open); diagnostic sensors `forecast_max_today`, `forecast_min_today`,
-`next_scheduled_event` (timestamp; attributes profile, action, covers); button
-`evaluate_now`.
+Unique ids: hub `f"{entry_id}_{key}"`, per cover `f"{subentry_id}_{key}"`.
+`has_entity_name = True` everywhere; the cover device is named after the cover.
 
-**Per-cover device:** switch `enabled`; select `mode` (auto | dark_only |
-protection_only); sensor `status` (enum: `closed_shading`, `open_no_shade`,
-`held_frost`, `protected_wind`, `door_open`, `quiet_hours`, `schedule_hold`,
-`manual_override`, `command_failed`, `unconfirmed`, `degraded`, `disabled`, `idle`,
-`unavailable`; attributes: desired_state, actual_state, winning_layer, reason, sun_hits,
-sunny, hot_day, room_state, wind_state, active_rule, next_planned_action (+time),
-last_engine_move, owner); binary sensor `manual_override` (attributes: since,
-manual_state, desired_state); button `reset_override`; diagnostic binary sensors
+**Hub device:** select `shading_mode` (off | auto | forced_sunlit | forced_all; default
+auto) [CONFIG]; select `reopening_mode` (active | passive | off; default passive)
+[CONFIG]; switch `simulation_mode` [CONFIG]; switch `verbose_logging` [CONFIG] (sets the
+integration logger to DEBUG while on; a `logger:` YAML entry overrides); binary sensors
+[DIAGNOSTIC] `hot_day`, `sunny` (debounced), `frost_active`, `any_wind_protection_active`,
+`problem` (device class PROBLEM; on while any non-dismissed repair issue of this integration
+is open, driven by the issue-registry update event); sensors [DIAGNOSTIC]
+`forecast_max_today`, `forecast_min_today`, `next_scheduled_event` (timestamp; attributes
+profile, action, covers); button `evaluate_now` [CONFIG].
+
+**Per-cover device:** switch `enabled` [CONFIG]; select `mode` (auto | dark_only |
+protection_only) [CONFIG]; sensor `status` (enum, no category) with values in precedence
+order: `cover_unavailable`, `disabled`, `command_failed`, `unconfirmed`, `held_frost`,
+`protected_wind`, `door_open`, `quiet_hours`, `partial`, `manual_override`,
+`schedule_hold`, `closed_shading`, `open_no_shade`, `idle`; attributes: `desired_state`,
+`actual_state`, `winning_layer`, `reason`, `sun_hits`, `sunny`, `hot_day`, `room_state`,
+`wind_state`, `active_rule`, `next_planned_action` (the move currently deferred by gate
+7–9 with its retry time, else the cover's next schedule rule), `last_engine_move`, `owner`,
+`degraded`. All attributes except `desired_state`, `actual_state`, `reason` are
+`_unrecorded_attributes`. Binary sensor `manual_override` (no category; attributes `since`,
+`overridden_desired`); button `reset_override` [CONFIG]; binary sensors [DIAGNOSTIC]
 `sun_hits`, `wind_protection_active`.
 
-**Services:** `cover_automation.reset_override` (target: cover status entities; no target
-= all covers); `cover_automation.evaluate_now`.
+**Services** (registered with `hass.services.async_register`, targets resolved via
+`homeassistant.helpers.target.async_extract_referenced_entity_ids`; no reference → all
+covers): `cover_automation.reset_override`, `cover_automation.evaluate_now`. Targets may
+be cover status entities or per-cover devices.
 
-**Logbook:** every engine command fires event `cover_automation_action` with
-`{entity_id (cover), action, reason, layer}`. `logbook.py` describes it, e.g. "Closed
-Bedroom for shading: sun hits, hot day", attributed to the cover entity itself.
+**Logbook:** every engine command (real or simulated) fires `cover_automation_action`
+`{entity_id (cover), action, reason, layer, simulated}`. `logbook.py` describes it
+("Closed Bedroom for shading: sun hits, hot day"), attributed to the cover entity. Manifest
+declares `dependencies: ["sun", "weather", "logbook"]`. A cover excluded from the
+recorder will not show these entries.
 
-**Repairs** (non-fixable, auto-clearing): wind wanted open during frost (per cover, plus
-persistent notification); wind sensor unavailable; weather unavailable beyond grace;
-configured cover or door sensor missing; cover references a deleted profile; three
-consecutive command failures on a cover.
+**Repairs** (non-fixable, auto-clearing; shared `translation_key` + `translation_placeholders`
+`{"cover": name}` for per-cover issues): wind or door wanted open during frost (per cover;
+plus a persistent notification, decisions 6/16); wind sensor unavailable; wind sensor unit
+changed; weather unavailable beyond grace or forecast fetch failing; frost source
+unavailable; door sensor unavailable; configured cover, door or room sensor missing;
+`room_only` without usable room sensor; cover supports neither open/close nor position;
+cover references a deleted profile; sun-relative rule skipped because it fell into quiet
+hours; three consecutive command failures.
 
 **Diagnostics** (`diagnostics.py`): hub config, all subentries, per-cover evaluation
 snapshot, persisted state. Nothing to redact.
 
 ## 5. Persistence, startup, error handling
 
-**Store** (one per hub entry; delayed save after changes, immediate save on unload,
-deleted on entry removal):
-- Per cover, five scalars: `owner` (engine | user); `engine_target` (open | closed |
-  null); `manual_move_at` (timestamp | null); `desired_at_manual_move` (open | closed |
-  null); `wind_active` (bool).
-- Hub: forecast latch `{date, max, min}`.
-- Runtime entity states (hub selects/switches, per-cover enabled/mode) use
-  `RestoreEntity`, not the Store.
-- Recomputed from live sensors, never stored: sunny debounce, frost, sun hits, command
-  backoff, schedule hold/release status (derived per §1.3). The wind hold timer restarts
-  after a restart.
+**Store** (`Store(version=1, minor_version=1)` with a migration function; one per hub
+entry; saved immediately on every command send and ownership change, delayed 1 s for
+everything else, immediately on unload, removed on entry removal):
+- Per cover: `owner`, `engine_target`, `manual_move_at`, `desired_at_manual_move`,
+  `wind_active`, `enabled`, `mode`.
+- Hub: forecast latch `{date, max, min, hot_day}`; `shading_mode`, `reopening_mode`,
+  `simulation_mode`, `verbose_logging`.
+- Entities are views over engine state and write through the engine (decision 17).
+- Recomputed, never stored: sunny debounce, frost, sun hits, room hysteresis, override
+  dwell timer, command backoff, schedule hold/release, pending commands (a pending command
+  is represented by `engine_target ≠ actual` with `owner == engine` after a restart, see
+  reconcile).
 
-**Startup:** weather entity missing → `ConfigEntryNotReady` (HA retries). Missing optional
-sensors → repair issue, continue. Load Store, subscribe listeners, first evaluation after
-`EVENT_HOMEASSISTANT_STARTED`. A cover that is unavailable is skipped until it reports a
-state.
+**Setup order:** validate weather entity (missing → `ConfigEntryNotReady`; lacks daily
+forecast → abort with error in the flow, repair issue later); create devices (§3); load
+Store; forward platforms; register the update listener; subscribe listeners; schedule the
+first evaluation with `async_at_started` (fires immediately when HA is already running, so
+reloads work). Missing optional sensors → repair issue, continue. First evaluation seeds
+all signals (§2). A cover that is `cover_unavailable` is skipped until it reports.
 
-**Reconcile after downtime:** if actual == `engine_target` → engine keeps ownership; else
-`owner = user`, `manual_move_at = now`, `desired_at_manual_move = current desired`
-(so an override exists iff actual ≠ desired).
+**Reconcile after downtime** (per cover, using the persisted `manual_move_at` for the
+release computation before any write):
+- first setup (`engine_target == null` and `owner` unset) → `owner = engine`,
+  `engine_target = actual` if ∈ {open, closed} else null, `dam = null`;
+- `actual == engine_target` → engine keeps ownership (covers a command that completed
+  during downtime);
+- otherwise, if `owner == engine` → treat as a manual move that happened during downtime:
+  `owner = user`, `manual_move_at = now`, `dam` per §1.4 using the first evaluation's
+  desired state (or inverse of actual); if `owner` is already `user` → keep
+  `manual_move_at` and `dam` unchanged (a live override survives a restart during frost or
+  quiet hours).
 
-**Command failures:** service call raises → log warning, status `command_failed`, one
-retry after 30 s. No settled transition observed within 120 s of sending → status
-`unconfirmed`, pending record dropped; subsequent re-sends of the same target back off by
-doubling the min interval up to 1 h. Three consecutive failures → repair issue. An
-exception while evaluating one cover is logged and isolated from other covers.
+**Command failures:** the service call raises → log warning, status `command_failed`, one
+retry after 30 s. Confirm window expires → status `unconfirmed`, pending cleared; a
+per-cover backoff timer (starts at `min_move_interval`, doubles per repeat, max 1 h)
+applies to all layers except wind. Three consecutive failures/unconfirmed → repair issue;
+cleared on the next confirmed command. Per-cover exceptions are isolated.
 
-**Config changes:** subentry or hub option change → entry reload. Runtime entity change →
-update engine state + evaluate, no reload. Timezone/location change
-(`EVENT_CORE_CONFIG_UPDATE`) → recompute sun-relative timers.
+**Unload / remove:** `async_unload_entry` cancels every timer and pending record, saves the
+Store, unloads platforms. `async_remove_entry` deletes the Store.
+`async_remove_config_entry_device` returns true for devices whose subentry no longer exists.
+
+**Config changes:** subentry or hub option change → reload via the update listener.
+Runtime entity change → engine state update + evaluation, no reload. Timezone/location
+change → recompute sun-relative timers.
 
 ## 6. Code structure, testing, tooling
 
 **Layout** `custom_components/cover_automation/`:
-- `engine/` — pure Python, no HA imports: `model.py` (enums, dataclasses for inputs,
-  decision, per-cover persisted state), `layers.py` (layer stack + act gate), `signals.py`
-  (hysteresis, debounce, daily latch primitives), `sun.py` (sun-hits geometry),
-  `schedule.py` (rule fire times with sunrise/sunset + clamps, hold/release, quiet hours).
-- `controller.py` — HA binding: subscriptions, timers, act gate execution, pending
-  command tracking, Store access, repair issues, event firing.
-- `config_flow.py` (hub flow + cover and profile subentry flows), `__init__.py`,
-  `const.py`, `store.py`, entity platforms `switch.py`, `select.py`, `sensor.py`,
-  `binary_sensor.py`, `button.py`, plus `logbook.py`, `diagnostics.py`, `services.yaml`,
-  `strings.json`, `translations/en.json`, `manifest.json`.
-- Repo root: `hacs.json`, `README.md`, `pyproject.toml`, `requirements_test.txt`,
-  `.github/workflows/` (hassfest, HACS validation, tests), `tests/`.
+- `engine/` — pure Python, no HA imports, own `engine/const.py`: `model.py` (enums,
+  dataclasses for inputs, per-cover state, decision), `layers.py` (layer stack), `gate.py`
+  (act gate), `signals.py` (hysteresis, debounce, dwell, daily latch), `sun.py` (geometry
+  with wrap-around and release margin), `schedule.py` (rule fire times with sunrise/sunset
+  and clamps, holds, releases, quiet hours), `override.py` (lifecycle), `classify.py`
+  (actual-state classification, pending/match/manual rules), `reconcile.py`.
+- `controller.py` — HA binding: subscriptions, timers, command sending with feature check,
+  pending tracking, Store, repairs, notifications, logbook event firing, entity-rename
+  tracking. Exposed to platforms via typed `entry.runtime_data`.
+- `config_flow.py` (hub flow + `cover` and `profile` subentry flows), `__init__.py`
+  (devices, setup order, update listener, services), `const.py`, `store.py`, platforms
+  `switch.py`, `select.py`, `sensor.py`, `binary_sensor.py`, `button.py`, `logbook.py`,
+  `diagnostics.py`, `services.yaml`, `translations/en.json` (no `strings.json`), `manifest.json`
+  (`domain`, `name`, `codeowners`, `config_flow: true`, `dependencies: ["sun", "weather",
+  "logbook"]`, `documentation`, `issue_tracker`, `iot_class: "calculated"`,
+  `integration_type: "hub"`, `single_config_entry: true`, `version`).
+- Translation key shapes: `config_subentries.cover` / `.profile` with `entry_type` and
+  `initiate_flow.user`; `entity.sensor.status.state.<value>`; `entity.select.<key>.state.<option>`;
+  `services.<name>`; `issues.<translation_key>.title/description` with placeholders.
+- Repo root: `hacs.json` (`homeassistant: "2026.8.0"`), `README.md`, `pyproject.toml`,
+  `requirements_test.txt`, `.github/workflows/` (hassfest and HACS actions, SHA-pinned;
+  tests), `tests/`. Brand icon requires a `home-assistant/brands` PR; generic icon otherwise.
 
-**Targets:** minimum Home Assistant 2026.4 (subentries stable; matches the target
-installation), tested against the current release. Python as required by that HA version.
+**Targets and pins:** Home Assistant ≥ 2026.8 (`homeassistant==2026.8.3` for tests),
+Python ≥ 3.14.2, `pytest-homeassistant-custom-component==0.13.357` (brings pytest-asyncio,
+pytest-freezer, pytest-socket). Ruff for lint and format; pyright strict on `engine/`.
 
-**Tooling:** venv with pinned `pytest-homeassistant-custom-component`; ruff (lint +
-format); pyright strict on `engine/`; GitHub Actions. HACS-installable as a custom
-repository; version in `manifest.json`, GitHub releases.
+**Deprecations avoided by construction:** `via_device` (2027.8), cross-subentry device
+moves (2027.8), `DeviceEntry.config_entries*` shims (2027.10), update-listener + reloading
+flows (2026.12), `deprecated_hass_argument` service helpers (2026.10),
+`show_advanced_options` (2027.6), manual `entity_id` generation (2027.2).
 
-**Testing:** table-driven unit tests for `engine/` (layer precedence incl. frost over wind
-and door over quiet hours; every hysteresis/debounce edge; override lifecycle in active
-and passive modes incl. the schedule-clears-override case; schedule hold/release; startup
-reconciliation; actual-state classification with tolerance). A **day-replay harness**
-feeding a synthetic sun path, weather sequence and room temperatures through the engine
-and asserting the command sequence. Integration tests with the HA test harness for config
-flows, entities, and state-change → service-call paths. Test-driven development
-throughout.
+**Testing:** table-driven unit tests for `engine/` covering: layer precedence (frost over
+wind over door over quiet hours over schedule over shading); mode table; every hysteresis,
+debounce, dwell and latch edge including seeding; override lifecycle a–e in both reopening
+modes; schedule close/open rule semantics, releases, re-close, quiet-hour rejection; door
+bypass rule; classification with tolerance, partial, moving, pending match/contrary/expiry;
+reconcile cases (first setup, completed-during-downtime, restart during frost with a live
+override). The fourteen reviewer scenarios (`docs/reviews/…behavior.md` §3) become named
+test cases with their expected outcomes. A **day-replay harness** inside `engine/` tests
+feeds a synthetic sun path, weather sequence, room temperatures and manual moves through
+the engine and asserts the command sequence. Controller tests with the HA test harness
+(pytest-freezer for time) for config flows incl. subentries, device creation, entities,
+state-change → service-call paths, reload via update listener, at-started on reload.
+Test-driven development throughout.
