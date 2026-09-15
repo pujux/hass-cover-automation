@@ -95,12 +95,32 @@ def test_wind_release_restoring_move_bypasses_quiet_hours_once():
     e.on_command_sent(r2.action, T0 + timedelta(minutes=30))
     e.on_transition(CoverState.CLOSED, T0 + timedelta(minutes=31))
     r3 = e.evaluate(
-        inp(actual=CoverState.OPEN, wind_active=False, schedule=quiet_hold),
+        inp(actual=CoverState.CLOSED, wind_active=False, schedule=quiet_hold),
         sig(T0 + timedelta(minutes=40)),
     )
-    assert r3.action is None or isinstance(
-        r3.action, Suppress
-    )  # exemption consumed; quiet hours hold
+    assert r3.action is None and e.rt.restoring_until is None
+
+
+def test_restoring_exemption_survives_a_frost_hold():
+    e = CoverEngine(CFG, CoverPersisted(owner=Owner.ENGINE, engine_target=Target.CLOSED))
+    quiet_hold = ScheduleView(
+        quiet_active=True, desired=Desired.CLOSED, rule_fired_at=T0, rule_index=0
+    )
+    r = e.evaluate(inp(actual=CoverState.CLOSED, wind_active=True, schedule=quiet_hold), sig())
+    e.on_command_sent(r.action, T0)
+    e.on_transition(CoverState.OPEN, T0 + timedelta(seconds=20))
+    # wind releases while frost is active: the frost layer wins, but the exemption must survive
+    r2 = e.evaluate(
+        inp(actual=CoverState.OPEN, wind_active=False, schedule=quiet_hold),
+        sig(T0 + timedelta(minutes=1), frost=True),
+    )
+    assert r2.action is None and e.rt.restoring_until is not None
+    # frost releases two minutes later, still inside quiet hours: the restoring move goes through
+    r3 = e.evaluate(
+        inp(actual=CoverState.OPEN, wind_active=False, schedule=quiet_hold),
+        sig(T0 + timedelta(minutes=3)),
+    )
+    assert r3.action == Send(Target.CLOSED, Layer.SCHEDULE)
 
 
 def test_status_precedence_partial_over_override_and_disabled_first():
@@ -184,3 +204,12 @@ def test_new_override_does_not_inherit_dwell_from_previous_episode():
         sig(T0 + timedelta(minutes=75)),
     )
     assert e.p.dam is None  # 31 minutes: ends on its own schedule
+
+
+def test_frost_conflict_not_notified_when_unknown_and_not_near_freezing():
+    e = CoverEngine(CFG, CoverPersisted(owner=Owner.ENGINE, engine_target=Target.CLOSED))
+    door = inp(actual=CoverState.CLOSED, door=DoorState.OPEN, door_last_changed=T0)
+    r = e.evaluate(door, sig(frost=None, frost_near_freezing=False))
+    assert r.status is Status.HELD_FROST and r.action is None and not r.notify_frost_conflict
+    r2 = e.evaluate(door, sig(frost=None, frost_near_freezing=True))
+    assert r2.notify_frost_conflict

@@ -59,15 +59,23 @@ class CoverEngine:
         decision = layers.evaluate(cfg, p, inputs, signals, restoring=restoring)
         if restoring:
             target = decision.desired.as_target()
-            if target is None or target.matches(inputs.actual):
+            below_agrees = decision.layer not in (Layer.FROST, Layer.WIND, Layer.DOOR) and (
+                target is None or target.matches(inputs.actual)
+            )
+            if below_agrees:
                 rt.restoring_until = None  # lower layers agree with actual: exemption lapses
                 restoring = False
 
         dwell_at = override.update_dwell(p, rt, decision, inputs.sun_hits, now)
 
+        frost_relevant = signals.frost is True or (
+            signals.frost is None and signals.frost_near_freezing
+        )
         notify = False
-        if decision.layer is Layer.FROST and (
-            decision.wind_opinion is Desired.OPEN or decision.door_opinion is Desired.OPEN
+        if (
+            decision.layer is Layer.FROST
+            and frost_relevant
+            and (decision.wind_opinion is Desired.OPEN or decision.door_opinion is Desired.OPEN)
         ):
             notify = not rt.frost_conflict_notified
             rt.frost_conflict_notified = True
