@@ -1,0 +1,28 @@
+[project]
+name = "cover-automation"
+version = "0.0.0"
+requires-python = ">=3.14.2"
+description = "Home Assistant custom integration: cover automation engine"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+src = ["custom_components", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "ANN"]
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "E501"]
+
+[tool.pyright]
+include = ["custom_components/cover_automation/engine"]
+strict = ["custom_components/cover_automation/engine"]
+pythonVersion = "3.14"
+reportMissingImports = true
