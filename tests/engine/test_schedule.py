@@ -147,6 +147,39 @@ def test_quiet_active_in_view_and_no_rules():
     assert v.quiet_active and v.desired is Desired.LEAVE_ALONE and v.rule_fired_at is None
 
 
+def test_close_clamp_crossing_into_previous_day_is_skipped():
+    # quiet 22:00-07:00. A sun-relative close rule landing at 06:30 sits in the early-morning
+    # part of the window that started yesterday; clamping to 21:59 would land on the previous
+    # day, so the rule is skipped for that day.
+    q = QuietHours(t("22:00"), t("07:00"))
+    r = Rule(Target.CLOSED, TimeMode.SUNRISE, offset_minutes=90)  # 05:00 + 90 min = 06:30
+    assert fire_time(r, DAY, SUN, q, TZ) is None
+    # the open counterpart is clamped forward to the quiet end instead
+    r_open = Rule(Target.OPEN, TimeMode.SUNRISE, offset_minutes=90)
+    assert fire_time(r_open, DAY, SUN, q, TZ) == at("2026-07-01", "07:00")
+
+
+def test_fired_between_across_days():
+    p = Profile("p", "p", (open_at("07:00"), close_at("21:30")), None)
+    fired = fired_between(p, at("2026-06-29", "20:00"), at("2026-07-01", "08:00"), SUN)
+    assert fired == [
+        (at("2026-06-29", "21:30"), 1),
+        (at("2026-06-30", "07:00"), 0),
+        (at("2026-06-30", "21:30"), 1),
+        (at("2026-07-01", "07:00"), 0),
+    ]
+    # boundaries: start is exclusive, end is inclusive
+    assert fired_between(p, at("2026-06-30", "21:30"), at("2026-07-01", "07:00"), SUN) == [
+        (at("2026-07-01", "07:00"), 0),
+    ]
+
+
+def test_next_fire_crosses_midnight():
+    p = Profile("p", "p", (open_at("07:00"), close_at("21:30")), None)
+    assert next_fire(p, at("2026-07-01", "22:00"), SUN) == (at("2026-07-02", "07:00"), 0)
+    assert last_fired(p, at("2026-07-02", "06:59"), SUN) == (at("2026-07-01", "21:30"), 1)
+
+
 def test_validate_rejects_bad_rules():
     bad = Profile(
         "p",
