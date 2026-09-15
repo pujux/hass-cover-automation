@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Home Assistant dev instance
+config/.storage/
+config/*.log*
+config/.HA_VERSION
+config/deps/
+config/home-assistant_v2.db*
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/settings.json
