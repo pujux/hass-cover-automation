@@ -23,3 +23,6 @@ config/home-assistant_v2.db*
 .idea/
 .vscode/*
 !.vscode/settings.json
+
+# Parallel task worktrees
+.worktrees/
