@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pytest
 from custom_components.cover_automation.engine.model import (
     CoverPersisted,
     CoverState,
@@ -74,3 +75,8 @@ def test_manual_move_at_parses_z_suffix():
     p = CoverPersisted.from_dict({"manual_move_at": "2026-07-01T12:00:00Z"})
     assert isinstance(p.manual_move_at, datetime)
     assert p.manual_move_at.tzinfo is not None
+
+
+def test_from_dict_rejects_naive_datetime():
+    with pytest.raises(ValueError):
+        CoverPersisted.from_dict({"manual_move_at": "2026-07-01T12:00:00"})
