@@ -125,6 +125,18 @@ def test_wind_protection_hysteresis_and_hold():
     assert w.update(49.0, plus(1400)) is False
 
 
+def test_wind_protection_hold_restarts_after_unavailable_gap():
+    w = WindProtection(60.0, 50.0, 900)
+    assert w.update(65.0, T0) is True
+    assert w.update(45.0, plus(1)) is True  # hold starts
+    assert w.update(None, plus(5)) is True  # gap: state frozen, hold clock dropped
+    assert w.next_check_at() is None
+    assert w.update(45.0, plus(901)) is True  # would have released with a stale clock
+    assert w.next_check_at() == plus(901 + 900)
+    assert w.update(45.0, plus(1800)) is True
+    assert w.update(45.0, plus(1801)) is False
+
+
 def test_wind_protection_freezes_when_unavailable():
     w = WindProtection(60.0, 50.0, 900, active=True)
     assert w.update(None, T0) is True

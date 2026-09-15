@@ -255,6 +255,7 @@ class WindProtection:
     def update(self, value: float | None, now: datetime) -> bool:
         if value is None:
             self.unavailable = True
+            self._below_since = None  # an unknown gap breaks the "continuously below" run
             return self.active
         self.unavailable = False
         if value >= self.upper:
