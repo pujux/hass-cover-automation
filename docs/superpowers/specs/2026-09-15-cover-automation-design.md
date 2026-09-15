@@ -1,7 +1,7 @@
 # Cover Automation Integration — Design Spec
 
-Date: 2026-09-15. Revision 3 (after two review rounds, see `docs/reviews/`).
-Related: `docs/design-decisions.md` (decision log, #1–#23), `docs/feature-selection.md`,
+Date: 2026-09-15. Revision 3.1 (after two review rounds, see `docs/reviews/`; open-rule one-shot refined during planning).
+Related: `docs/design-decisions.md` (decision log, #1–#24), `docs/feature-selection.md`,
 `docs/reference/smart-cover-automation-analysis.md`.
 
 ## 0. Scope
@@ -91,10 +91,12 @@ bottom; the first layer with an opinion sets the desired state.
    - A **close rule** that fired at T holds `closed` until the next rule of the profile
      fires or until `manual_move_at > T` (decision 22; `manual_move_at` is written only by
      manual moves and never cleared, so a release is sticky until the next rule).
-   - An **open rule** that fired at T yields `open`, evaluated as a **state test** on every
-     pass including the firing one: it is satisfied as soon as actual is `open` (immediately
-     if already open), and lapses when the next rule fires or `manual_move_at > T`.
-     Afterwards the layers below govern.
+   - An **open rule** that fired at T is a **one-shot**: it yields `open` while the cover has
+     not yet been observed open since T, for at most 15 minutes after T, and only until the
+     next rule fires or `manual_move_at > T`. Once the cover has been observed open the rule
+     is satisfied and has no further opinion, so a later shading close is not undone
+     (decision 24). The satisfied marker is runtime-only; a restart within the 15-minute
+     window while the cover is closed may re-open it once.
    - Any rule firing clears `dam` and `dam_layer` for every cover of the profile (schedules
      are authoritative, decision 10), even when the desired state does not change.
    - Two consecutive close rules are legal and act as a re-close (documented escape hatch).
@@ -388,7 +390,8 @@ everything else, immediately on unload, removed on entry removal):
   `simulation_mode`, `verbose_logging`.
 - Entities are views over engine state and write through the engine (decision 17).
 - Recomputed, never stored: sunny debounce, frost, sun hits, room hysteresis and dwell,
-  override dwell timer, command backoff, schedule hold/release, pending records (after a
+  override dwell timer, command backoff, schedule hold/release, open-rule satisfied marker,
+  pending records (after a
   restart a command in flight is represented by `owner == engine AND engine_target ≠
   actual` and is resolved by reconcile).
 
