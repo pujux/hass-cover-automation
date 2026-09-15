@@ -207,6 +207,12 @@ def test_i_sun_relative_rule_clamped_before_quiet_hours():
     )  # 22:30 -> clamped to 21:59
     sim = Sim(CFG, at("2026-07-01", "21:00"), profile=profile)
     sim.night()
+    # Yesterday's clamped firing (2026-06-30 21:59) still holds the cover closed
+    # (spec §1.2 layer 5), so the engine closes it first; the user then releases the
+    # hold for good with a manual open (decision 22).
+    sim.advance(1)
+    assert sim.actual is CoverState.CLOSED
+    sim.manual(CoverState.OPEN)
     sim.until("2026-07-01", "21:58")
     assert sim.actual is CoverState.OPEN
     sim.until("2026-07-01", "22:00")
