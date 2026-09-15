@@ -206,12 +206,14 @@ def test_g_single_open_rule_does_not_suppress_shading():
         actual=CoverState.CLOSED,
         persisted=CoverPersisted(owner=Owner.ENGINE, engine_target=Target.CLOSED),
     )
-    sim.day(hits=False)
-    sim.until("2026-07-01", "05:31")
-    assert sim.actual is CoverState.OPEN
-    sim.day(hits=True)
+    sim.night()  # 05:00: still dark in the harness; nothing wants to open
+    sim.until("2026-07-01", "05:29")
+    assert sim.actual is CoverState.CLOSED
+    sim.until("2026-07-01", "05:31")  # 05:30: the one-shot open rule fires
+    assert sim.actual is CoverState.OPEN and sim.commands[-1][2] is Layer.SCHEDULE
+    sim.day(hits=True)  # sun up and on the window: shading may close after the min interval
     sim.until("2026-07-01", "10:00")
-    assert sim.actual is CoverState.CLOSED  # shading runs after the one-shot open
+    assert sim.actual is CoverState.CLOSED  # the satisfied open rule does not re-assert (dec. 24)
 
 
 def test_h_two_close_rules_reclose():
