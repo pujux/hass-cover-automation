@@ -348,6 +348,72 @@ async def test_profile_partial_quiet_hours_is_rejected(hass: HomeAssistant, hub_
     )
 
 
+async def test_profile_empty_name_is_rejected(hass: HomeAssistant, hub_entry) -> None:
+    result = await start(hass, hub_entry, const.SUBENTRY_PROFILE)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {
+            const.CONF_NAME: "   ",
+            "rule_1": {
+                const.CONF_RULE_ENABLED: False,
+                const.CONF_RULE_ACTION: "closed",
+                const.CONF_RULE_TIME_MODE: "fixed",
+                const.CONF_RULE_OFFSET: 0,
+            },
+            "rule_2": {
+                const.CONF_RULE_ENABLED: False,
+                const.CONF_RULE_ACTION: "closed",
+                const.CONF_RULE_TIME_MODE: "fixed",
+                const.CONF_RULE_OFFSET: 0,
+            },
+            "rule_3": {
+                const.CONF_RULE_ENABLED: False,
+                const.CONF_RULE_ACTION: "closed",
+                const.CONF_RULE_TIME_MODE: "fixed",
+                const.CONF_RULE_OFFSET: 0,
+            },
+            "rule_4": {
+                const.CONF_RULE_ENABLED: False,
+                const.CONF_RULE_ACTION: "closed",
+                const.CONF_RULE_TIME_MODE: "fixed",
+                const.CONF_RULE_OFFSET: 0,
+            },
+        },
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {const.CONF_NAME: "name_required"}
+
+
+async def test_cover_reconfigure_offers_none_when_profile_deleted(
+    hass: HomeAssistant, hub_entry
+) -> None:
+    """A cover referencing a schedule profile that was later deleted must fall back to
+    'none' in the reconfigure form default instead of an unselectable stale value."""
+    set_weather(hass)
+    set_cover(hass, "cover.bedroom")
+    hass.config_entries.async_add_subentry(
+        hub_entry,
+        config_entries.ConfigSubentry(
+            **cover_subentry_data("cover.bedroom", schedule_profile="ghost_profile")
+        ),
+    )
+    cover_sub = next(iter(hub_entry.subentries.values()))
+    result = await hass.config_entries.subentries.async_init(
+        (hub_entry.entry_id, const.SUBENTRY_COVER),
+        context={"source": config_entries.SOURCE_RECONFIGURE, "subentry_id": cover_sub.subentry_id},
+    )
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "reconfigure"
+    marker = next(k for k in result["data_schema"].schema if str(k) == const.CONF_SCHEDULE_PROFILE)
+    assert marker.default() == const.PROFILE_NONE
+
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {**COVER_INPUT, const.CONF_SCHEDULE_PROFILE: marker.default()}
+    )
+    assert result["type"] is FlowResultType.ABORT and result["reason"] == "reconfigure_successful"
+    updated = hub_entry.subentries[cover_sub.subentry_id]
+    assert updated.data[const.CONF_SCHEDULE_PROFILE] == const.PROFILE_NONE
+
+
 async def test_profile_reconfigure_prefills_and_updates(hass: HomeAssistant, hub_entry) -> None:
     hass.config_entries.async_add_subentry(
         hub_entry, config_entries.ConfigSubentry(**profile_subentry_data("Night"))

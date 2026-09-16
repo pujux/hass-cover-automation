@@ -243,6 +243,69 @@ async def test_removed_cover_subentry_clears_its_issues(hass: HomeAssistant, hub
     assert ir.async_get(hass).async_get_issue(const.DOMAIN, issue_id) is None
 
 
+async def test_broken_cover_config_is_isolated_and_repaired(hass: HomeAssistant, hub_entry) -> None:
+    hass.config_entries.async_add_subentry(
+        hub_entry,
+        ConfigSubentry(**cover_subentry_data("cover.broken", shading_rule="bogus")),
+    )
+    hass.config_entries.async_add_subentry(
+        hub_entry, ConfigSubentry(**cover_subentry_data("cover.bedroom"))
+    )
+    set_cover(hass, "cover.broken")
+    set_cover(hass, "cover.bedroom")
+    await setup_hub(hass, hub_entry)
+    assert hub_entry.state is ConfigEntryState.LOADED
+
+    broken_sub = next(
+        s
+        for s in hub_entry.subentries.values()
+        if s.data.get(const.CONF_COVER_ENTITY) == "cover.broken"
+    )
+    good_sub = next(
+        s
+        for s in hub_entry.subentries.values()
+        if s.data.get(const.CONF_COVER_ENTITY) == "cover.bedroom"
+    )
+    assert set(hub_entry.runtime_data.covers) == {good_sub.subentry_id}
+    issue_id = f"broken_cover_config_{broken_sub.subentry_id}"
+    issue = ir.async_get(hass).async_get_issue(const.DOMAIN, issue_id)
+    assert issue is not None and issue.translation_key == "broken_cover_config"
+
+    hass.config_entries.async_remove_subentry(hub_entry, broken_sub.subentry_id)
+    await hass.async_block_till_done()
+    assert hub_entry.state is ConfigEntryState.LOADED
+    assert ir.async_get(hass).async_get_issue(const.DOMAIN, issue_id) is None
+
+
+async def test_broken_profile_config_is_isolated_and_repaired(
+    hass: HomeAssistant, hub_entry
+) -> None:
+    hass.config_entries.async_add_subentry(
+        hub_entry,
+        ConfigSubentry(
+            **profile_subentry_data(
+                "Broken",
+                rules=[
+                    {
+                        const.CONF_RULE_ACTION: "closed",
+                        const.CONF_RULE_TIME_MODE: "fixed",
+                        const.CONF_RULE_TIME: "25:99",
+                    }
+                ],
+                quiet=None,
+            )
+        ),
+    )
+    await setup_hub(hass, hub_entry)
+    assert hub_entry.state is ConfigEntryState.LOADED
+
+    prof_sub = next(iter(hub_entry.subentries.values()))
+    assert prof_sub.subentry_id not in hub_entry.runtime_data.profiles
+    issue_id = f"broken_profile_config_{prof_sub.subentry_id}"
+    issue = ir.async_get(hass).async_get_issue(const.DOMAIN, issue_id)
+    assert issue is not None and issue.translation_key == "broken_profile_config"
+
+
 async def test_remove_entry_clears_open_issues(hass: HomeAssistant, hub_entry) -> None:
     set_weather(hass)
     set_sun(hass)
