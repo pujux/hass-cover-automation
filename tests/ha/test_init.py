@@ -388,3 +388,39 @@ async def test_migrate_entry_advances_minor_version(hass: HomeAssistant) -> None
 
     assert await async_migrate_entry(hass, entry)
     assert (entry.version, entry.minor_version) == (1, 1)
+
+
+# --- Task 9: controller lifecycle and service registration ---
+
+
+async def test_async_setup_registers_services_without_an_entry(hass: HomeAssistant) -> None:
+    from homeassistant.setup import async_setup_component
+
+    assert await async_setup_component(hass, const.DOMAIN, {})
+    assert hass.services.has_service(const.DOMAIN, "reset_override")
+    assert hass.services.has_service(const.DOMAIN, "evaluate_now")
+
+
+async def test_controller_is_created_before_platforms_and_started_after(
+    hass: HomeAssistant, hub_entry
+) -> None:
+    hass.config_entries.async_add_subentry(
+        hub_entry, ConfigSubentry(**cover_subentry_data("cover.bedroom"))
+    )
+    set_cover(hass, "cover.bedroom")
+    hass.set_state(CoreState.starting)
+    set_weather(hass)
+    set_sun(hass)
+    set_sensor(hass, "sensor.wind", 5, unit="km/h", device_class="wind_speed")
+    assert await hass.config_entries.async_setup(hub_entry.entry_id)
+    await hass.async_block_till_done()
+    controller = hub_entry.runtime_data.controller
+    # Platforms are up (they read runtime_data.controller) but the controller waits for start.
+    assert hass.states.get("switch.cover_automation_simulation_mode") is not None
+    assert controller.started is False
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+    assert controller.started is True
+    assert await hass.config_entries.async_unload(hub_entry.entry_id)
+    await hass.async_block_till_done()
+    assert controller.started is False

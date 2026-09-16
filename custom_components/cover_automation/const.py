@@ -7,7 +7,13 @@ from typing import Final
 from homeassistant.const import Platform
 
 DOMAIN: Final = "cover_automation"
-PLATFORMS: Final[list[Platform]] = []  # entity platforms arrive with plan 2b
+PLATFORMS: Final[list[Platform]] = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 
 SUBENTRY_COVER: Final = "cover"
 SUBENTRY_PROFILE: Final = "profile"

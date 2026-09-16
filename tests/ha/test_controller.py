@@ -10,7 +10,7 @@ from custom_components.cover_automation.controller import EVENT_ACTION, CoverAut
 from custom_components.cover_automation.engine.model import CoverPersisted, Owner, Status, Target
 from custom_components.cover_automation.forecast import TodayForecast
 from homeassistant.config_entries import ConfigSubentry
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import CoreState, HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.util import dt as dt_util
@@ -61,6 +61,9 @@ async def start_controller(
     set_sun(hass, elevation=elevation, azimuth=180.0)
     set_sensor(hass, "sensor.wind", 5.0, unit="km/h", device_class="wind_speed")
     set_cover(hass, "cover.bedroom", state="open", position=100, features=3)
+    # These tests drive a controller of their own, so keep the entry's controller parked:
+    # `async_at_started` only runs its job once Home Assistant has finished starting.
+    hass.set_state(CoreState.starting)
     assert await hass.config_entries.async_setup(hub_entry.entry_id)
     await hass.async_block_till_done()
     data = hub_entry.runtime_data
@@ -206,6 +209,7 @@ async def test_simulation_logs_event_without_service_call(hass, hub_entry, cover
     set_sun(hass, elevation=40.0, azimuth=180.0)
     set_sensor(hass, "sensor.wind", 5.0, unit="km/h")
     set_cover(hass, "cover.bedroom")
+    hass.set_state(CoreState.starting)  # park the entry's own controller (see start_controller)
     assert await hass.config_entries.async_setup(hub_entry.entry_id)
     data = hub_entry.runtime_data
     data.store.data.simulation = True
@@ -262,6 +266,7 @@ async def test_unavailable_cover_is_skipped_until_it_reports(hass, hub_entry, co
     set_sun(hass, elevation=40.0, azimuth=180.0)
     set_sensor(hass, "sensor.wind", 5.0, unit="km/h")
     hass.states.async_set("cover.bedroom", "unavailable")
+    hass.set_state(CoreState.starting)  # park the entry's own controller (see start_controller)
     assert await hass.config_entries.async_setup(hub_entry.entry_id)
     data = hub_entry.runtime_data
     controller = CoverAutomationController(

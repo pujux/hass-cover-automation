@@ -14,18 +14,24 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.start import async_at_started
+from homeassistant.helpers.typing import ConfigType
 
 from . import const, repairs
 from .config_map import CoverBindings, HubConfig, cover_config, hub_config, profile
+from .controller import CoverAutomationController
 from .engine.model import CoverConfig, CoverPersisted
 from .engine.schedule import Profile
+from .services import async_setup_services
 from .store import CoverAutomationStore
 
 _LOGGER = logging.getLogger(__name__)
 SUN_ENTITY = "sun.sun"
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(const.DOMAIN)
 
 
 @dataclass(slots=True)
@@ -35,6 +41,7 @@ class CoverAutomationData:
     profiles: dict[str, Profile]
     store: CoverAutomationStore
     hub_device_id: str
+    controller: CoverAutomationController
     missing_entities: list[str] = field(default_factory=list)
 
 
@@ -191,6 +198,13 @@ def ensure_devices(hass: HomeAssistant, entry: ConfigEntry) -> str:
     return hub_device.id
 
 
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the domain services once, independent of any config entry (spec §4)."""
+    del config
+    async_setup_services(hass)
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: CoverAutomationConfigEntry) -> bool:
     try:
         hub = hub_config(entry)
@@ -276,12 +290,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: CoverAutomationConfigEnt
     # persisted state, so prune against every cover subentry id, not just the ones in `covers`.
     store.prune({s.subentry_id for s in entry.get_subentries_of_type(const.SUBENTRY_COVER)})
 
+    # The controller is built before the platforms are forwarded: every platform reads
+    # `runtime_data.controller` in its `async_setup_entry`. It only starts (subscriptions,
+    # timers, first evaluation) once Home Assistant has finished starting, so the engines
+    # never see half-restored states.
+    controller = CoverAutomationController(
+        hass,
+        entry,
+        hub=hub,
+        covers=covers,
+        profiles=profiles,
+        store=store,
+        hub_device_id=hub_device_id,
+    )
     entry.runtime_data = CoverAutomationData(
         hub=hub,
         covers=covers,
         profiles=profiles,
         store=store,
         hub_device_id=hub_device_id,
+        controller=controller,
     )
 
     await hass.config_entries.async_forward_entry_setups(entry, const.PLATFORMS)
@@ -291,6 +319,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: CoverAutomationConfigEnt
             hass, partial(_async_check_optional_entities, entry=entry, hub=hub, covers=covers)
         )
     )
+    entry.async_on_unload(async_at_started(hass, controller.async_start_job))
     return True
 
 
@@ -300,6 +329,9 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: CoverAutomationConfigEntry) -> bool:
+    # Stop first: cancels every subscription and timer and drains in-flight evaluations, so
+    # nothing can write to the Store (or command a cover) after the save below.
+    await entry.runtime_data.controller.async_stop()
     await entry.runtime_data.store.async_save()
     return await hass.config_entries.async_unload_platforms(entry, const.PLATFORMS)
 
