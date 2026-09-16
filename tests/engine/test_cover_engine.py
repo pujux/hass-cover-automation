@@ -146,6 +146,30 @@ def test_wind_disabled_cover_gets_no_restoring_window():
     assert e.rt.restoring_until is None
 
 
+def test_wind_episode_that_starts_and_ends_while_disabled_leaves_no_window():
+    """The edge detector keeps tracking while disabled, or re-enabling looks like a release."""
+    e = CoverEngine(CFG, CoverPersisted(owner=Owner.ENGINE, engine_target=Target.OPEN))
+    e.evaluate(inp(actual=CoverState.OPEN, sun_hits=False, wind_active=False), sig())
+    e.p.enabled = False
+    e.evaluate(
+        inp(actual=CoverState.OPEN, sun_hits=False, wind_active=True),
+        sig(at("2026-07-01", "13:05")),
+    )
+    assert e.rt.prev_wind_active is True
+    e.evaluate(
+        inp(actual=CoverState.OPEN, sun_hits=False, wind_active=False),
+        sig(at("2026-07-01", "13:10")),
+    )
+    assert e.rt.prev_wind_active is False and e.rt.restoring_until is None
+    e.p.enabled = True
+    r = e.evaluate(
+        inp(actual=CoverState.CLOSED, sun_hits=False, wind_active=False),
+        sig(at("2026-07-01", "13:15")),
+    )
+    assert e.rt.restoring_until is None
+    assert r.decision.reason != "restoring"
+
+
 def test_injected_runtime_keeps_its_own_dwell():
     rt = CoverRuntime(override_dwell=ContinuousCondition(60))
     e = CoverEngine(CFG, CoverPersisted(), rt)

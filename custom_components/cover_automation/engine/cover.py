@@ -77,6 +77,10 @@ class CoverEngine:
             rt.last_settled = inputs.actual  # baseline for C2, also right after a restart
         p.wind_active = inputs.wind_active
         if not p.enabled:
+            # The wind edge detector keeps tracking while disabled: an episode that starts and
+            # ends out of sight would otherwise look like a release on the next enabled
+            # evaluation and open a restoring window for wind that is long gone.
+            rt.prev_wind_active = inputs.wind_active
             # §1.1: the engine never commands a disabled cover and no timers run for it.
             disabled = Decision(Desired.LEAVE_ALONE, Layer.NONE, "disabled")
             return StepResult(disabled, None, self.status(disabled, inputs), False, None)
