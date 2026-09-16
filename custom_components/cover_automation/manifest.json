@@ -2,7 +2,7 @@
   "after_dependencies": ["logbook", "sun"],
   "codeowners": ["@julianpufler"],
   "config_flow": true,
-  "dependencies": ["weather"],
+  "dependencies": ["persistent_notification", "weather"],
   "documentation": "https://github.com/julianpufler/hass-cover-automation",
   "domain": "cover_automation",
   "integration_type": "hub",

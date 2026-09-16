@@ -1,0 +1,483 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import timedelta
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from custom_components.cover_automation import const
+from custom_components.cover_automation.controller import EVENT_ACTION, CoverAutomationController
+from custom_components.cover_automation.engine.model import CoverPersisted, Owner, Status, Target
+from custom_components.cover_automation.forecast import TodayForecast
+from homeassistant.config_entries import ConfigSubentry
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import (
+    async_capture_events,
+    async_fire_time_changed,
+    async_mock_service,
+)
+
+from tests.ha.conftest import (
+    cover_subentry_data,
+    profile_subentry_data,
+    set_cover,
+    set_sensor,
+    set_sun,
+    set_weather,
+)
+
+HOT = TodayForecast(30.0, 18.0)
+
+
+def _subentry_id(hub_entry, subentry_type: str) -> str:
+    return next(
+        s.subentry_id for s in hub_entry.subentries.values() if s.subentry_type == subentry_type
+    )
+
+
+async def start_controller(
+    hass: HomeAssistant,
+    hub_entry,
+    *,
+    forecast=HOT,
+    cover_overrides=None,
+    persisted=None,
+    profile=None,
+    elevation=40.0,
+):
+    """Set up the hub (2a) with one cover subentry and start a controller on top of it."""
+    overrides = dict(cover_overrides or {})
+    if profile is not None:
+        hass.config_entries.async_add_subentry(hub_entry, ConfigSubentry(**profile))
+        overrides[const.CONF_SCHEDULE_PROFILE] = _subentry_id(hub_entry, const.SUBENTRY_PROFILE)
+    hass.config_entries.async_add_subentry(
+        hub_entry, ConfigSubentry(**cover_subentry_data("cover.bedroom", **overrides))
+    )
+    sub_id = _subentry_id(hub_entry, const.SUBENTRY_COVER)
+    set_weather(hass, condition="sunny", temperature=20.0)
+    set_sun(hass, elevation=elevation, azimuth=180.0)
+    set_sensor(hass, "sensor.wind", 5.0, unit="km/h", device_class="wind_speed")
+    set_cover(hass, "cover.bedroom", state="open", position=100, features=3)
+    assert await hass.config_entries.async_setup(hub_entry.entry_id)
+    await hass.async_block_till_done()
+    data = hub_entry.runtime_data
+    if persisted is not None:
+        data.store.data.covers[sub_id] = persisted
+    controller = CoverAutomationController(
+        hass,
+        hub_entry,
+        hub=data.hub,
+        covers=data.covers,
+        profiles=data.profiles,
+        store=data.store,
+        hub_device_id=data.hub_device_id,
+    )
+    with patch(
+        "custom_components.cover_automation.controller.async_fetch_today",
+        AsyncMock(return_value=forecast),
+    ):
+        await controller.async_start()
+        await hass.async_block_till_done()
+    return controller, sub_id
+
+
+@pytest.fixture
+def cover_services(hass: HomeAssistant):
+    return {
+        "close": async_mock_service(hass, "cover", "close_cover"),
+        "open": async_mock_service(hass, "cover", "open_cover"),
+        "position": async_mock_service(hass, "cover", "set_cover_position"),
+    }
+
+
+async def test_hot_sunny_day_closes_cover_and_persists_ownership(
+    hass, hub_entry, cover_services, hass_storage, freezer
+):
+    controller, sub_id = await start_controller(hass, hub_entry)
+    try:
+        assert len(cover_services["close"]) == 1
+        assert cover_services["close"][0].data["entity_id"] == "cover.bedroom"
+        p = controller.engine(sub_id).p
+        assert p.owner is Owner.ENGINE and p.engine_target is Target.CLOSED
+        stored = hass_storage[const.storage_key(hub_entry.entry_id)]["data"]["covers"][sub_id]
+        assert stored["owner"] == "engine" and stored["engine_target"] == "closed"
+        view = controller.cover_views[sub_id]
+        assert (
+            view.desired_state == "closed"
+            and view.winning_layer == "shading"
+            and view.next_planned_action
+        )
+        set_cover(hass, "cover.bedroom", state="closing", position=60)
+        await hass.async_block_till_done()
+        set_cover(hass, "cover.bedroom", state="closed", position=0)
+        await hass.async_block_till_done()
+        assert controller.cover_views[sub_id].status is Status.CLOSED_SHADING
+        assert controller.engine(sub_id).rt.pending is None
+        assert len(cover_services["close"]) == 1
+    finally:
+        await controller.async_stop()
+
+
+async def test_manual_open_becomes_override_and_is_respected(
+    hass, hub_entry, cover_services, freezer
+):
+    controller, sub_id = await start_controller(hass, hub_entry)
+    try:
+        set_cover(hass, "cover.bedroom", state="closed", position=0)
+        await hass.async_block_till_done()
+        set_cover(hass, "cover.bedroom", state="opening", position=20)
+        await hass.async_block_till_done()
+        set_cover(hass, "cover.bedroom", state="open", position=100)
+        await hass.async_block_till_done()
+        view = controller.cover_views[sub_id]
+        assert (
+            view.status is Status.MANUAL_OVERRIDE
+            and view.override_active
+            and view.overridden_desired == "closed"
+        )
+        assert controller.engine(sub_id).p.owner is Owner.USER
+        freezer.tick(timedelta(minutes=12))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+        assert len(cover_services["close"]) == 1  # no re-close during the dwell
+        await controller.async_reset_override(sub_id)
+        await hass.async_block_till_done()
+        assert not controller.cover_views[sub_id].override_active
+        assert len(cover_services["close"]) == 2  # shading closes again after the reset
+    finally:
+        await controller.async_stop()
+
+
+async def test_wind_opens_even_during_override(hass, hub_entry, cover_services, freezer):
+    controller, sub_id = await start_controller(
+        hass,
+        hub_entry,
+        cover_overrides={
+            const.CONF_WIND_ENABLED: True,
+            const.CONF_WIND_UPPER: 60,
+            const.CONF_WIND_LOWER: 50,
+            const.CONF_WIND_UNIT: "km/h",
+        },
+    )
+    try:
+        set_cover(hass, "cover.bedroom", state="closed", position=0)
+        await hass.async_block_till_done()
+        set_sensor(hass, "sensor.wind", 75.0, unit="km/h", device_class="wind_speed")
+        await hass.async_block_till_done()
+        assert len(cover_services["open"]) == 1
+        view = controller.cover_views[sub_id]
+        assert (
+            view.status is Status.PROTECTED_WIND
+            and view.wind_active
+            and controller.hub_view.any_wind_active
+        )
+    finally:
+        await controller.async_stop()
+
+
+async def test_command_failure_sets_status_and_retries(hass, hub_entry, freezer):
+    attempts: list[ServiceCall] = []
+
+    async def failing(call: ServiceCall) -> None:
+        attempts.append(call)
+        raise HomeAssistantError("device offline")
+
+    hass.services.async_register("cover", "close_cover", failing)
+    controller, sub_id = await start_controller(hass, hub_entry)
+    try:
+        assert len(attempts) == 1 and controller.cover_views[sub_id].status is Status.COMMAND_FAILED
+        freezer.tick(timedelta(seconds=31))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+        assert len(attempts) == 2
+    finally:
+        await controller.async_stop()
+
+
+async def test_simulation_logs_event_without_service_call(hass, hub_entry, cover_services):
+    events = async_capture_events(hass, EVENT_ACTION)
+    hass.config_entries.async_add_subentry(
+        hub_entry, ConfigSubentry(**cover_subentry_data("cover.bedroom"))
+    )
+    set_weather(hass)
+    set_sun(hass, elevation=40.0, azimuth=180.0)
+    set_sensor(hass, "sensor.wind", 5.0, unit="km/h")
+    set_cover(hass, "cover.bedroom")
+    assert await hass.config_entries.async_setup(hub_entry.entry_id)
+    data = hub_entry.runtime_data
+    data.store.data.simulation = True
+    controller = CoverAutomationController(
+        hass,
+        hub_entry,
+        hub=data.hub,
+        covers=data.covers,
+        profiles=data.profiles,
+        store=data.store,
+        hub_device_id=data.hub_device_id,
+    )
+    with patch(
+        "custom_components.cover_automation.controller.async_fetch_today",
+        AsyncMock(return_value=HOT),
+    ):
+        await controller.async_start()
+        await hass.async_block_till_done()
+    try:
+        assert not cover_services["close"]
+        assert (
+            len(events) == 1
+            and events[0].data["simulated"] is True
+            and events[0].data["action"] == "close"
+        )
+        assert (
+            events[0].data["entity_id"] == "cover.bedroom" and events[0].data["layer"] == "shading"
+        )
+    finally:
+        await controller.async_stop()
+
+
+async def test_disabled_cover_gets_no_commands(hass, hub_entry, cover_services):
+    controller, sub_id = await start_controller(
+        hass, hub_entry, persisted=CoverPersisted(enabled=False)
+    )
+    try:
+        assert (
+            not cover_services["close"] and controller.cover_views[sub_id].status is Status.DISABLED
+        )
+        await controller.async_set_enabled(sub_id, True)
+        await hass.async_block_till_done()
+        assert len(cover_services["close"]) == 1
+    finally:
+        await controller.async_stop()
+
+
+async def test_unavailable_cover_is_skipped_until_it_reports(hass, hub_entry, cover_services):
+    hass.config_entries.async_add_subentry(
+        hub_entry, ConfigSubentry(**cover_subentry_data("cover.bedroom"))
+    )
+    sub_id = next(iter(hub_entry.subentries))
+    set_weather(hass)
+    set_sun(hass, elevation=40.0, azimuth=180.0)
+    set_sensor(hass, "sensor.wind", 5.0, unit="km/h")
+    hass.states.async_set("cover.bedroom", "unavailable")
+    assert await hass.config_entries.async_setup(hub_entry.entry_id)
+    data = hub_entry.runtime_data
+    controller = CoverAutomationController(
+        hass,
+        hub_entry,
+        hub=data.hub,
+        covers=data.covers,
+        profiles=data.profiles,
+        store=data.store,
+        hub_device_id=data.hub_device_id,
+    )
+    with patch(
+        "custom_components.cover_automation.controller.async_fetch_today",
+        AsyncMock(return_value=HOT),
+    ):
+        await controller.async_start()
+        await hass.async_block_till_done()
+    try:
+        assert (
+            controller.cover_views[sub_id].status is Status.COVER_UNAVAILABLE
+            and not cover_services["close"]
+        )
+        assert controller.engine(sub_id).p.owner is None  # not reconciled yet
+        set_cover(hass, "cover.bedroom", state="open", position=100, features=3)
+        await hass.async_block_till_done()
+        assert (
+            controller.engine(sub_id).p.owner is Owner.ENGINE and len(cover_services["close"]) == 1
+        )
+    finally:
+        await controller.async_stop()
+
+
+async def test_hub_repairs_and_problem_flag(hass, hub_entry, cover_services, freezer):
+    controller, _sub_id = await start_controller(hass, hub_entry, forecast=None)
+    try:
+        assert not controller.hub_view.problem
+        freezer.tick(timedelta(minutes=31))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+        reg = ir.async_get(hass)
+        assert (
+            reg.async_get_issue(const.DOMAIN, f"forecast_fetch_failed_{hub_entry.entry_id}")
+            is not None
+        )
+        assert controller.hub_view.problem is True
+        hass.states.async_remove("sun.sun")
+        await controller.async_evaluate_now()
+        await hass.async_block_till_done()
+        assert reg.async_get_issue(const.DOMAIN, f"sun_missing_{hub_entry.entry_id}") is not None
+    finally:
+        await controller.async_stop()
+
+
+async def test_stop_cancels_everything(hass, hub_entry, cover_services, freezer):
+    controller, _sub_id = await start_controller(hass, hub_entry)
+    await controller.async_stop()
+    assert not controller.started
+    set_cover(hass, "cover.bedroom", state="closed", position=0)
+    freezer.tick(timedelta(hours=2))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert (
+        len(cover_services["close"]) == 1
+    )  # nothing ran after stop (and no lingering timers at teardown)
+
+
+async def test_schedule_rule_fires_and_updates_views(hass, hub_entry, cover_services, freezer):
+    """A fixed close rule fires, commands the cover and lands in the hub and cover views."""
+    closes = cover_services["close"]
+    # The 07:00 open rule keeps yesterday's 21:30 close rule from holding the cover shut at
+    # 21:00 (a close rule is a standing hold until the next rule fires).
+    rules = [
+        {
+            const.CONF_RULE_ACTION: "closed",
+            const.CONF_RULE_TIME_MODE: "fixed",
+            const.CONF_RULE_TIME: "21:30:00",
+        },
+        {
+            const.CONF_RULE_ACTION: "open",
+            const.CONF_RULE_TIME_MODE: "fixed",
+            const.CONF_RULE_TIME: "07:00:00",
+        },
+    ]
+    freezer.move_to(dt_util.now().replace(hour=21, minute=0, second=0, microsecond=0))
+    controller, sub_id = await start_controller(
+        hass,
+        hub_entry,
+        forecast=TodayForecast(10.0, 5.0),
+        elevation=-10.0,
+        profile=profile_subentry_data("Night", rules=rules, quiet=None),
+    )
+    try:
+        assert not closes  # night, cold: nothing to do before the rule fires
+        assert controller.hub_view.next_event_action == "closed"
+        assert controller.hub_view.next_event_profile == "Night"
+        assert "schedule" in (controller.cover_views[sub_id].next_planned_action or "")
+        freezer.tick(timedelta(minutes=31))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+        assert len(closes) == 1
+        assert "rule 1" in (controller.cover_views[sub_id].active_rule or "")
+    finally:
+        await controller.async_stop()
+
+
+async def test_rule_skipped_repair(hass, hub_entry, cover_services, freezer):
+    """A sunset rule that quiet hours swallow raises one repair per profile."""
+    rules = [
+        {
+            const.CONF_RULE_ACTION: "closed",
+            const.CONF_RULE_TIME_MODE: "sunset",
+            const.CONF_RULE_OFFSET: 0,
+        }
+    ]
+    controller, _sub_id = await start_controller(
+        hass,
+        hub_entry,
+        profile=profile_subentry_data("Night", rules=rules, quiet=("00:00:00", "23:59:00")),
+    )
+    try:
+        profile_id = _subentry_id(hub_entry, const.SUBENTRY_PROFILE)
+        issue = ir.async_get(hass).async_get_issue(const.DOMAIN, f"rule_skipped_{profile_id}")
+        assert issue is not None
+        assert issue.translation_placeholders == {"profile": "Night", "rule": "1"}
+    finally:
+        await controller.async_stop()
+
+
+async def test_problem_flag_is_seeded_at_start(hass, hub_entry, cover_services, freezer):
+    """An issue that already exists before the controller starts shows up in the hub view."""
+    # An id outside `repairs.ENTRY_ISSUE_PREFIXES`: the setup-time stale sweep leaves it alone
+    # and the controller never clears it, so only the seeding in `async_start` can surface it.
+    ir.async_create_issue(
+        hass,
+        const.DOMAIN,
+        "pre_existing_problem",
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="sun_missing",
+    )
+    controller, _sub_id = await start_controller(hass, hub_entry)
+    try:
+        assert controller.hub_view.problem is True
+    finally:
+        await controller.async_stop()
+
+
+async def test_midnight_task_after_stop_arms_nothing(hass, hub_entry, cover_services, freezer):
+    """A trigger task created just before `async_stop` must not re-arm the schedule (F1)."""
+    rules = [
+        {
+            const.CONF_RULE_ACTION: "closed",
+            const.CONF_RULE_TIME_MODE: "fixed",
+            const.CONF_RULE_TIME: "21:30:00",
+        }
+    ]
+    controller, _sub_id = await start_controller(
+        hass, hub_entry, profile=profile_subentry_data("Night", rules=rules, quiet=None)
+    )
+    assert controller._schedule._unsub is not None
+    commands = len(cover_services["close"])
+    await controller.async_stop()
+    assert controller._schedule._unsub is None
+    controller._on_midnight(dt_util.utcnow())
+    controller._on_forecast_tick(dt_util.utcnow())
+    controller._on_fallback_tick(dt_util.utcnow())
+    await hass.async_block_till_done()
+    assert controller._schedule._unsub is None
+    assert len(cover_services["close"]) == commands  # nothing evaluated after the stop
+
+
+async def test_command_in_flight_is_not_resent(hass, hub_entry, cover_services, freezer):
+    """A pending command is never re-sent while the cover has not reported back yet."""
+    controller, sub_id = await start_controller(
+        hass,
+        hub_entry,
+        cover_overrides={
+            const.CONF_WIND_ENABLED: True,
+            const.CONF_WIND_UPPER: 60,
+            const.CONF_WIND_LOWER: 50,
+            const.CONF_WIND_UNIT: "km/h",
+        },
+    )
+    try:
+        set_cover(hass, "cover.bedroom", state="closed", position=0)
+        await hass.async_block_till_done()
+        set_sensor(hass, "sensor.wind", 75.0, unit="km/h", device_class="wind_speed")
+        await hass.async_block_till_done()
+        assert len(cover_services["open"]) == 1
+        assert controller.engine(sub_id).rt.pending is not None
+        # The wind layer skips the minimum-interval gate, so only the in-flight guard can
+        # keep these evaluations from re-sending the open the cover has not confirmed yet.
+        await controller.async_evaluate_now()
+        await controller.async_evaluate_now({sub_id})
+        await hass.async_block_till_done()
+        assert len(cover_services["open"]) == 1
+    finally:
+        await controller.async_stop()
+
+
+async def test_evaluation_waiting_on_a_lock_does_nothing_after_stop(
+    hass, hub_entry, cover_services, freezer
+):
+    """A task queued on a contended per-cover lock must not act or arm a timer after stop."""
+    controller, sub_id = await start_controller(hass, hub_entry)
+    commands = len(cover_services["close"])
+    lock = controller._locks[sub_id]
+    await lock.acquire()
+    evaluation = hass.async_create_task(controller.async_evaluate())
+    await asyncio.sleep(0)
+    stop = hass.async_create_task(controller.async_stop())
+    await asyncio.sleep(0)
+    assert not controller.started  # `async_stop` is now draining the locks
+    lock.release()
+    await stop
+    await evaluation
+    await hass.async_block_till_done()
+    assert len(cover_services["close"]) == commands
+    assert controller._cover_timers == {}
