@@ -1,7 +1,7 @@
 # Cover Automation Integration — Design Spec
 
-Date: 2026-09-15. Revision 3.3 (after two review rounds, the engine implementation's whole-branch review, and the HA-binding final fix wave, see `docs/reviews/`).
-Related: `docs/design-decisions.md` (decision log, #1–#30), `docs/feature-selection.md`,
+Date: 2026-09-15. Revision 3.4 (after two review rounds, the engine implementation's whole-branch review, the HA-binding final fix wave, see `docs/reviews/`, and the engine follow-up that made in-flight duplicate suppression a gate condition, §1.3 gate 7).
+Related: `docs/design-decisions.md` (decision log, #1–#31), `docs/feature-selection.md`,
 `docs/reference/smart-cover-automation-analysis.md`.
 
 ## 0. Scope
