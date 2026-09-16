@@ -127,6 +127,11 @@ Evaluated when desired ∈ {open, closed} and desired ≠ actual. Produces `send
 or `suppress`, in this order:
 
 1. Cover disabled → suppress.
+
+   1a. A pending command for the same target whose confirm window has not expired →
+   suppress, for every layer including wind and door (decision 31). The controller surfaces
+   it as the pending move; the confirm window, a transition or a command failure clears it.
+
 2. Frost active → suppress; frost unknown → suppress unless the request comes from the wind
    layer and the last known temperature was not near freezing (§1.2 layer 1). Wind or door
    requests suppressed here raise the notification and repair issue once per episode.
@@ -138,9 +143,8 @@ or `suppress`, in this order:
 6. Desired `open` from the **shading** layer, by hub reopening mode: `passive` (default) →
    send only if the engine owns the current state; `active` → send; `off` → suppress.
    Schedule-layer opens are not subject to reopening mode (schedules are authoritative).
-7. Actual is `moving` → suppress until settled (wind and door excepted); a pending command
-   for the same target (confirm window not yet expired) → suppress for every layer; the
-   controller surfaces this as the pending move and re-evaluates on the settle transition.
+7. Actual is `moving` → suppress until settled (wind and door excepted); the controller
+   surfaces this as the pending move and re-evaluates on the settle transition.
 8. Shading-layer moves only: minimum interval since the **last engine command of any layer**
    on this cover (`min_move_interval`, default 10 min) → defer to the earliest allowed time
    (decision 21; this also damps the open-rule → shading and wind-release → shading

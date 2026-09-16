@@ -220,6 +220,23 @@ def test_pending_command_for_the_same_target_suppresses_every_layer():
         rt(),
         T0,
     ) == Send(Target.OPEN, Layer.WIND)
+    # ... and neither does it block the other layers' opposite target.
+    opposite = CoverInputs(CoverState.CLOSED, door=DoorState.OPEN, door_last_changed=T0)
+    owned = CoverPersisted(owner=Owner.ENGINE, engine_target=Target.CLOSED)  # passive reopening
+    for layer in (Layer.SHADING, Layer.DOOR):
+        assert decide(d(Desired.OPEN, layer), CFG, owned, opposite, sig(), rt(), T0) == Send(
+            Target.OPEN, layer
+        )
+    # Ordering: a disabled cover still reports `disabled`, not `in_flight`.
+    assert decide(
+        d(Desired.CLOSED, Layer.SHADING),
+        CFG,
+        CoverPersisted(enabled=False),
+        inputs,
+        sig(),
+        rt(),
+        T0,
+    ) == Suppress("disabled")
 
 
 def test_min_interval_applies_to_shading_only_and_uses_any_send():

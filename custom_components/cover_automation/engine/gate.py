@@ -51,10 +51,10 @@ def decide(
     # 1. disabled
     if not p.enabled:
         return Suppress("disabled")
-    # 7a. a command for this very target is already in flight (§1.3 gate 7). Unlike the
-    # `moving` clause below this holds for every layer -- wind and door included -- because a
-    # duplicate of the command already travelling to the cover achieves nothing. It sits
-    # ahead of the protection layers for that reason; the confirm window, a transition or a
+    # 1a. a command for this very target is already in flight (§1.3 gate 1a). Unlike the
+    # `moving` clause at gate 7 this holds for every layer -- wind and door included -- because
+    # a duplicate of the command already travelling to the cover achieves nothing, which is
+    # why it sits ahead of the protection layers; the confirm window, a transition or a
     # failure clears `pending` and the next evaluation is free to send again.
     if rt.pending is not None and rt.pending.target is target:
         return Suppress("in_flight")
