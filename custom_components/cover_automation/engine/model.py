@@ -294,6 +294,7 @@ class Pending:
     layer: Layer
     sent_at: datetime
     last_progress_at: datetime
+    prev_last_send_at: datetime | None = None  # interval clock before this send (I1 rollback)
 
 
 @dataclass(slots=True)

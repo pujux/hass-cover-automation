@@ -14,7 +14,13 @@ def on_command_sent(
 ) -> None:
     p.engine_target = target
     p.owner = Owner.ENGINE
-    rt.pending = Pending(target=target, layer=layer, sent_at=now, last_progress_at=now)
+    rt.pending = Pending(
+        target=target,
+        layer=layer,
+        sent_at=now,
+        last_progress_at=now,
+        prev_last_send_at=rt.last_send_at,
+    )
     rt.last_send_at = now
     rt.restoring_until = None
     rt.contrary_since = None
@@ -48,6 +54,10 @@ def on_command_failed(
     p: CoverPersisted, rt: CoverRuntime, cfg: CoverConfig, now: datetime
 ) -> datetime:
     del p  # ownership stays with the engine; the retry decides
+    if rt.pending is not None:
+        # A command that never reached the cover must not start the minimum interval, or the
+        # 30 s retry (spec §5) would be deferred by gate 8 for a full interval.
+        rt.last_send_at = rt.pending.prev_last_send_at
     rt.pending = None
     rt.contrary_since = None
     rt.command_failed = True

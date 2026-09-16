@@ -219,6 +219,24 @@ def test_min_interval_applies_to_shading_only_and_uses_any_send():
     assert b == Send(Target.CLOSED, Layer.SCHEDULE)
 
 
+def test_backoff_defers_a_shading_move_after_the_min_interval_expired():
+    """I1/T8: the generic backoff path (gate 9), reachable now that a failed send rolls
+    the interval clock back."""
+    rt = CoverRuntime(
+        last_send_at=T0 - timedelta(hours=2), backoff_until=T0 + timedelta(seconds=30)
+    )
+    a = decide(
+        d(Desired.CLOSED, Layer.SHADING),
+        CFG,
+        CoverPersisted(),
+        CoverInputs(CoverState.OPEN),
+        sig(),
+        rt,
+        T0,
+    )
+    assert a == Defer(T0 + timedelta(seconds=30), "backoff")
+
+
 def test_simulation_sends_once_per_layer_target():
     rt = CoverRuntime()
     a = decide(

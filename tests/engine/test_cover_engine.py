@@ -206,6 +206,19 @@ def test_new_override_does_not_inherit_dwell_from_previous_episode():
     assert e.p.dam is None  # 31 minutes: ends on its own schedule
 
 
+def test_failed_command_retries_after_30s_without_a_min_interval_defer():
+    """I1: a command that never reached the cover must not start the interval clock."""
+    e = CoverEngine(CFG, CoverPersisted(owner=Owner.ENGINE, engine_target=Target.OPEN))
+    r = e.evaluate(inp(), sig())
+    assert r.action == Send(Target.CLOSED, Layer.SHADING)
+    e.on_command_sent(r.action, T0)
+    retry_at = e.on_command_failed(T0 + timedelta(seconds=1))
+    assert retry_at == T0 + timedelta(seconds=31)  # spec §5: one retry after 30 s
+    assert e.rt.last_send_at is None  # rolled back to what it was before the failed send
+    r2 = e.evaluate(inp(), sig(retry_at))
+    assert r2.action == Send(Target.CLOSED, Layer.SHADING)
+
+
 def test_frost_conflict_not_notified_when_unknown_and_not_near_freezing():
     e = CoverEngine(CFG, CoverPersisted(owner=Owner.ENGINE, engine_target=Target.CLOSED))
     door = inp(actual=CoverState.CLOSED, door=DoorState.OPEN, door_last_changed=T0)
