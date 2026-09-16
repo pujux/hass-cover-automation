@@ -1,7 +1,7 @@
 # Cover Automation Integration — Design Spec
 
-Date: 2026-09-15. Revision 3.2 (after two review rounds and the engine implementation's whole-branch review, see `docs/reviews/`).
-Related: `docs/design-decisions.md` (decision log, #1–#29), `docs/feature-selection.md`,
+Date: 2026-09-15. Revision 3.3 (after two review rounds, the engine implementation's whole-branch review, and the HA-binding final fix wave, see `docs/reviews/`).
+Related: `docs/design-decisions.md` (decision log, #1–#30), `docs/feature-selection.md`,
 `docs/reference/smart-cover-automation-analysis.md`.
 
 ## 0. Scope
@@ -381,8 +381,12 @@ expansion, which is why those two must stay uncategorised).
 **Logbook:** every engine command (real or simulated) fires `cover_automation_action`
 `{entity_id (cover), action, reason, layer, simulated}`. `logbook.py` describes it
 ("Closed Bedroom for shading: sun hits, hot day"), attributed to the cover entity. Manifest
-declares `dependencies: ["sun", "weather", "logbook"]`. A cover excluded from the
-recorder will not show these entries.
+declares `dependencies: ["weather"]` and `after_dependencies: ["logbook", "sun"]`: no core
+integration hard-depends on sun or logbook, logbook discovers `logbook.py` describers itself
+via `async_process_integration_platforms`, a hard logbook dependency would drag in
+http/frontend/recorder and break recorder-less installs, and setup raises
+`ConfigEntryNotReady` while `sun.sun` is missing (sun ships in `default_config`). A cover
+excluded from the recorder will not show these entries.
 
 **Repairs** (non-fixable, auto-clearing; shared `translation_key` + `translation_placeholders`
 `{"cover": name}` for per-cover issues): wind or door wanted open during frost (per cover;
@@ -471,9 +475,9 @@ change → recompute sun-relative timers.
   (devices, setup order, update listener, services), `const.py`, `store.py`, platforms
   `switch.py`, `select.py`, `sensor.py`, `binary_sensor.py`, `button.py`, `logbook.py`,
   `diagnostics.py`, `services.yaml`, `translations/en.json` (no `strings.json`), `manifest.json`
-  (`domain`, `name`, `codeowners`, `config_flow: true`, `dependencies: ["sun", "weather",
-  "logbook"]`, `documentation`, `issue_tracker`, `iot_class: "calculated"`,
-  `integration_type: "hub"`, `single_config_entry: true`, `version`).
+  (`domain`, `name`, `codeowners`, `config_flow: true`, `dependencies: ["weather"]`,
+  `after_dependencies: ["logbook", "sun"]`, `documentation`, `issue_tracker`,
+  `iot_class: "calculated"`, `integration_type: "hub"`, `single_config_entry: true`, `version`).
 - Translation key shapes: `config_subentries.cover` / `.profile` with `entry_type` and
   `initiate_flow.user`; `entity.sensor.status.state.<value>`; `entity.select.<key>.state.<option>`;
   `services.<name>`; `issues.<translation_key>.title/description` with placeholders.
