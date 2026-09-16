@@ -264,6 +264,7 @@ from __future__ import annotations
 from datetime import date
 from zoneinfo import ZoneInfo
 
+import pytest
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 
 from custom_components.cover_automation.forecast import TodayForecast, async_fetch_today
@@ -288,7 +289,7 @@ async def test_fetch_today_picks_local_day_and_converts_to_celsius(hass: HomeAss
         {"datetime": "2026-07-10T22:00:00+00:00", "temperature": 86.0, "templow": 59.0},  # 11 July
     ])
     today = await async_fetch_today(hass, WEATHER, date(2026, 7, 10), TZ)
-    assert today == TodayForecast(max_c=15.555555555555557, min_c=10.0)
+    assert today is not None and today.max_c == pytest.approx(15.5556, abs=1e-3) and today.min_c == pytest.approx(10.0)
 
 
 async def test_fetch_today_handles_missing_low_and_no_match(hass: HomeAssistant) -> None:
@@ -843,6 +844,7 @@ from custom_components.cover_automation.config_map import cover_config, hub_conf
 from custom_components.cover_automation.engine.model import CoverState, DoorState, ScheduleView
 from custom_components.cover_automation.engine.signals import DailyLatch
 from custom_components.cover_automation.forecast import TodayForecast
+from custom_components.cover_automation.store import StoreData
 from custom_components.cover_automation.signals_adapter import (
     CoverSignalSet,
     HubSignalSource,
@@ -935,6 +937,7 @@ async def test_hot_day_latches_and_forecast_failure_is_tracked(hass: HomeAssista
     now = dt_util.utcnow()
     set_weather(hass)
     src = HubSignalSource(hass, hub_config(hub_entry), DailyLatch())
+    src.seed(now)
     day = date(2026, 7, 10)
     src.apply_forecast(TodayForecast(30.0, 18.0), day, now)
     assert src.hot_day is True and src.latch.max == 30.0
@@ -945,7 +948,7 @@ async def test_hot_day_latches_and_forecast_failure_is_tracked(hass: HomeAssista
     assert src.forecast_failed_beyond_grace(now + timedelta(seconds=1801))
     src.rollover(date(2026, 7, 11))
     assert src.hot_day is None
-    hub_signals = src.signals(now, __import__("custom_components.cover_automation.store", fromlist=["StoreData"]).StoreData(), 35.0)
+    hub_signals = src.signals(now, StoreData(), 35.0)
     assert hub_signals.sun_elevation == 35.0 and hub_signals.hot_day is None and hub_signals.sunny is True
 
 
@@ -964,6 +967,7 @@ async def test_room_in_fahrenheit_and_labels(hass: HomeAssistant, hub_entry):
     inputs = sig.inputs(CoverState.OPEN, ScheduleView())
     assert inputs.room_cold and not inputs.room_hot and sig.room_state == "cold"
     set_sensor(hass, "sensor.room", 80.0, unit="°F")  # 26.7 °C ≥ 25
+    sig.update(now, (180.0, 40.0))  # raw change observed; the 10-minute dwell starts here
     sig.update(now + timedelta(minutes=11), (180.0, 40.0))
     assert sig.inputs(CoverState.OPEN, ScheduleView()).room_hot and sig.room_state == "hot"
     hass.states.async_set("sensor.room", "unavailable")
@@ -1296,7 +1300,7 @@ class CoverSignalSet:
 ```
 (`temperature_unit_of` reads `unit_of_measurement`; it is unit-agnostic despite the name — if that reads badly, add `unit_of = temperature_unit_of` alias in `units.py` and use it for the wind sensor.)
 
-- [ ] **Step 4: Run** — `.venv/bin/pytest tests/ha/test_signals_adapter.py -q && .venv/bin/ruff check . && .venv/bin/ruff format . && .venv/bin/pyright` → green. Replace the `__import__` in the hot-day test with a proper `from custom_components.cover_automation.store import StoreData` import.
+- [ ] **Step 4: Run** — `.venv/bin/pytest tests/ha/test_signals_adapter.py -q && .venv/bin/ruff check . && .venv/bin/ruff format . && .venv/bin/pyright` → green. 
 
 - [ ] **Step 5: Commit**
 
@@ -1322,7 +1326,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   - `class ScheduleTracker(hass, profiles: Mapping[str, Profile], cover_profile: Mapping[str, str | None], on_fire: Callable[[frozenset[str], datetime], Awaitable[None]], *, sun: SunTimes | None = None)` with `tz` property (`dt_util.get_default_time_zone()`), `view(cover_id, now, actual, manual_move_at, satisfied_fire_at) -> ScheduleView`, `next_event(now) -> NextEvent | None`, `next_event_for(cover_id, now) -> NextEvent | None`, `active_rule_label(cover_id, now) -> str | None` (e.g. `"close rule 1 of Bedroom (21:30)"`), `skipped_rules_today(now) -> list[tuple[str, int]]` (profile ids + rule indexes whose `fire_time` is None for a sun-relative rule), `async_arm(now)`, `async_cancel()`.
 - Consumes: engine `schedule.view/next_fire/last_fired/fire_time`, `Profile`, `Target`.
 
-Behaviour: `async_arm` cancels any pending timer, computes the earliest `next_fire` over all profiles that have covers, and schedules `async_track_point_in_time` for it. When it fires, every profile whose `next_fire` (computed at `at - 1 s`) equals `at` (±1 s) contributes its covers; `on_fire(covers, at)` is awaited, then the tracker re-arms from `at + 1 s`. Profiles without covers never arm timers but still appear in `next_event` only when they have covers.
+Behaviour: `async_arm` cancels any pending timer, computes the earliest `next_fire` over all profiles that have covers, and schedules `async_track_point_in_time` for it. When it fires, every profile whose `next_fire` (computed at `at - 30 s`) lies within 30 s of `at` contributes its covers; `on_fire(covers, at)` is awaited, then the tracker re-arms from `at` (`next_fire` is strictly later than `now`). Profiles without covers never arm timers but still appear in `next_event` only when they have covers.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1401,7 +1405,7 @@ async def test_hass_sun_times_and_skipped_rules(hass: HomeAssistant) -> None:
     day = date(2026, 7, 10)
     assert sun.sunrise(day) < sun.sunset(day)
     # a sunset close rule whose only clamp would land on the previous day is skipped
-    all_day_quiet = Profile("p2", "Quiet", (Rule(Target.CLOSED, TimeMode.SUNSET, None, 0),), QuietHours(time(0, 1), time(0, 0)))
+    all_day_quiet = Profile("p2", "Quiet", (Rule(Target.CLOSED, TimeMode.SUNSET, None, 0),), QuietHours(time(0, 0), time(23, 59)))
     tracker = ScheduleTracker(hass, {"p2": all_day_quiet}, {"c1": "p2"}, lambda c, a: None, sun=FixedSun())  # type: ignore[arg-type]
     assert tracker.skipped_rules_today(local(2026, 7, 10, 12, 0)) == [("p2", 0)]
 ```
@@ -1432,7 +1436,7 @@ from .engine.model import CoverState, ScheduleView, Target
 from .engine.schedule import Profile, SunTimes, TimeMode
 
 _LOGGER = logging.getLogger(__name__)
-_MATCH_TOLERANCE = timedelta(seconds=1)
+_MATCH_TOLERANCE = timedelta(seconds=30)  # rules have minute granularity; HA fires at or after the point in time
 
 
 class HassSunTimes:
@@ -1567,7 +1571,7 @@ class ScheduleTracker:
                 covers.update(event.covers)
         if covers:
             await self._on_fire(frozenset(covers), at)
-        self.async_arm(at + _MATCH_TOLERANCE)
+        self.async_arm(at)
 ```
 
 - [ ] **Step 4: Run** — `.venv/bin/pytest tests/ha/test_scheduler.py -q && .venv/bin/ruff check . && .venv/bin/ruff format . && .venv/bin/pyright` → green. If `async_track_point_in_time` rejects the coroutine function directly, wrap it: `HassJob(self._fired)`.
@@ -1750,7 +1754,6 @@ async def test_command_failure_sets_status_and_retries(hass, hub_entry, freezer)
 
 
 async def test_simulation_logs_event_without_service_call(hass, hub_entry, cover_services):
-    hub_entry.add_to_hass(hass)
     events = async_capture_events(hass, EVENT_ACTION)
     hass.config_entries.async_add_subentry(hub_entry, ConfigSubentry(**cover_subentry_data("cover.bedroom")))
     set_weather(hass); set_sun(hass, elevation=40.0, azimuth=180.0)
@@ -1845,6 +1848,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Mapping
+from dataclasses import asdict
 from datetime import datetime, timedelta
 from functools import partial
 from typing import Any
@@ -1877,6 +1881,7 @@ from .engine.cover import CoverEngine
 from .engine.model import (
     CoverConfig,
     CoverInputs,
+    CoverPersisted,
     CoverState,
     Defer,
     Layer,
@@ -1898,6 +1903,17 @@ from .views import CoverView, HubView, signal_update
 
 _LOGGER = logging.getLogger(__name__)
 _INTEGRATION_LOGGER = logging.getLogger("custom_components.cover_automation")
+
+
+def _jsonable(value: Any) -> Any:
+    """datetime → ISO string, StrEnum → value, recursively (diagnostics)."""
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return getattr(value, "value", value)
 
 EVENT_ACTION = f"{const.DOMAIN}_action"
 FALLBACK_TICK = timedelta(minutes=5)
@@ -1938,6 +1954,7 @@ class CoverAutomationController:
         self._cover_timers: dict[str, CALLBACK_TYPE] = {}
         self._unsubs: list[CALLBACK_TYPE] = []
         self._last_forecast_fetch: datetime | None = None
+        self._watched: dict[str, set[str] | None] = {}
         self._problem = False
         self.hub_view = HubView()
         self.cover_views: dict[str, CoverView] = {
@@ -1952,7 +1969,7 @@ class CoverAutomationController:
     async def async_start(self) -> None:
         now = dt_util.utcnow()
         for cover_id, (cfg, bind) in self._covers.items():
-            persisted = self._store.data.covers.setdefault(cover_id, __import__("custom_components.cover_automation.engine.model", fromlist=["CoverPersisted"]).CoverPersisted())
+            persisted = self._store.data.covers.setdefault(cover_id, CoverPersisted())
             self._engines[cover_id] = CoverEngine(cfg, persisted, override_dwell_s=self.hub.override_dwell_s)
             self._signals[cover_id] = CoverSignalSet(
                 self.hass, cfg, bind, self.hub, wind_active=persisted.wind_active,
@@ -2229,10 +2246,12 @@ class CoverAutomationController:
                           hs.forecast_failed_beyond_grace(now), translation_key="forecast_fetch_failed")
         repairs.set_issue(self.hass, repairs.hub_issue_id(eid, repairs.ISSUE_SUN_MISSING), sun is None,
                           translation_key="sun_missing")
+        if hub.outdoor_temperature_sensor:
+            frost_source_missing = hs.frost_source_unavailable
+        else:  # weather-entity temperature: only flag when the entity is up but has no temperature
+            frost_source_missing = hs.frost.active is None and hs.frost_source_unavailable and not hs.weather_unavailable_beyond_grace(now)
         repairs.set_issue(self.hass, repairs.hub_issue_id(eid, repairs.ISSUE_FROST_SOURCE_UNAVAILABLE),
-                          hs.frost.active is None and hs.frost_source_unavailable and hs.weather_unavailable_beyond_grace(now) is False
-                          if not hub.outdoor_temperature_sensor else hs.frost_source_unavailable,
-                          translation_key="frost_source_unavailable")
+                          frost_source_missing, translation_key="frost_source_unavailable")
         repairs.set_issue(self.hass, repairs.hub_issue_id(eid, repairs.ISSUE_WIND_UNAVAILABLE),
                           any_wind and hs.wind_sensor_unavailable, translation_key="wind_sensor_unavailable")
 
@@ -2323,8 +2342,7 @@ class CoverAutomationController:
                     "consecutive_failures": rt.consecutive_failures, "command_failed": rt.command_failed,
                     "unconfirmed": rt.unconfirmed, "restoring_until": rt.restoring_until.isoformat() if rt.restoring_until else None,
                 },
-                "view": {k: (v.isoformat() if isinstance(v, datetime) else getattr(v, "value", v))
-                         for k, v in self.cover_views[cover_id].__dict__.items()} if hasattr(self.cover_views[cover_id], "__dict__") else str(self.cover_views[cover_id]),
+                "view": _jsonable(asdict(self.cover_views[cover_id])),
             }
         return out
 
@@ -2374,7 +2392,7 @@ class CoverAutomationController:
     async def async_evaluate_now(self, cover_ids: Iterable[str] | None = None) -> None:
         await self.async_evaluate(cover_ids=cover_ids)
 ```
-Notes for the implementer: (a) replace the `__import__` in `async_start` with a top-level `from .engine.model import CoverPersisted` (kept inline above only to make the snippet self-contained); (b) `snapshot()`'s view serialisation: `CoverView` is a slots dataclass — use `dataclasses.asdict(view)` and convert `datetime`/`StrEnum` values with a small `_jsonable()` helper instead of the `__dict__` fallback shown; (c) the `frost_source_unavailable` expression in `_update_hub_repairs` must be simplified to: outdoor sensor configured → `hs.frost_source_unavailable`; not configured → `hs.frost.active is None and hs.frost_source_unavailable and not hs.weather_unavailable_beyond_grace(now)` (the weather issue already covers the other case); (d) `_watched` must be declared in `__init__` as `self._watched: dict[str, set[str] | None] = {}`; (e) every `hass.async_create_task` from callbacks should use `self.entry.async_create_background_task(self.hass, coro, name=...)` so tasks are cancelled with the entry — if that helper needs a loaded entry in tests (it does not; it only tracks tasks), keep `hass.async_create_task`.
+Notes for the implementer: tasks created from callbacks may use `self.entry.async_create_background_task(self.hass, coro, name=...)` so they are cancelled with the entry; if that helper misbehaves for an entry that is not loaded in a unit test, keep `hass.async_create_task`. Add `async def async_start_job(self, hass: HomeAssistant) -> None: await self.async_start()` (the coroutine `async_at_started` calls in Task 9).
 
 - [ ] **Step 4: Run** — `.venv/bin/pytest tests/ha/test_controller.py -q && .venv/bin/pytest -q && .venv/bin/ruff check . && .venv/bin/ruff format . && .venv/bin/pyright` → green; teardown must report no lingering timers.
 
@@ -2775,6 +2793,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
@@ -2784,7 +2803,7 @@ from tests.ha.fakes import FakeController
 
 def fake_entry(hass, hub_entry, ctrl):
     hub_entry.runtime_data = SimpleNamespace(controller=ctrl, covers={"sub1": (None, None), "sub2": (None, None)})
-    hub_entry.mock_state(hass, __import__("homeassistant.config_entries", fromlist=["ConfigEntryState"]).ConfigEntryState.LOADED)
+    hub_entry.mock_state(hass, ConfigEntryState.LOADED)
 
 
 async def test_setup_services_is_idempotent(hass: HomeAssistant):
@@ -2804,7 +2823,10 @@ async def test_resolve_targets_by_device_and_entity(hass: HomeAssistant, hub_ent
 
 
 async def test_services_dispatch_to_controller(hass: HomeAssistant, hub_entry):
+    from custom_components.cover_automation.views import CoverView
+
     ctrl = FakeController()
+    ctrl.cover_views = {"sub1": CoverView(name="A", cover_entity="cover.a"), "sub2": CoverView(name="B", cover_entity="cover.b")}
     fake_entry(hass, hub_entry, ctrl)
     services.async_setup_services(hass)
     await hass.services.async_call(const.DOMAIN, "evaluate_now", {}, blocking=True)
