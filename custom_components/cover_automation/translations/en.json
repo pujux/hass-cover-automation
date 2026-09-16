@@ -63,6 +63,16 @@
       }
     }
   },
+  "issues": {
+    "missing_entity": {
+      "description": "The entity {entity_id} referenced by Cover Automation does not exist. Fix the configuration or restore the entity.",
+      "title": "Configured entity is missing"
+    },
+    "missing_profile": {
+      "description": "Cover {cover} references a schedule profile that was deleted. It behaves as if it had no profile until you pick another one.",
+      "title": "Schedule profile is missing"
+    }
+  },
   "options": {
     "step": {
       "init": {
