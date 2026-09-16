@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, datetime, time, timedelta
 
@@ -119,6 +120,33 @@ async def test_fired_handler_exception_still_rearms(hass: HomeAssistant, freezer
     await hass.async_block_till_done()
     assert len(calls) == 2 and calls[1][0] == frozenset({"c1"})
     tracker.async_cancel()
+
+
+async def test_cancel_while_handler_suspended_prevents_rearm(hass: HomeAssistant, freezer) -> None:
+    """async_cancel during an in-flight on_fire must not let the stale _fired re-arm (fix round 2)."""
+    resume = asyncio.Event()
+    fired: list[frozenset[str]] = []
+
+    async def on_fire(covers, at):
+        await resume.wait()
+        fired.append(covers)
+
+    freezer.move_to(local(2026, 7, 10, 21, 29))
+    tracker = ScheduleTracker(hass, {"p1": NIGHT}, {"c1": "p1"}, on_fire, sun=FixedSun())
+    tracker.async_arm(dt_util.utcnow())
+    freezer.move_to(local(2026, 7, 10, 21, 30) + timedelta(seconds=1))
+    # HA runs coroutine jobs as eager tasks: this synchronously drives _fired up to the
+    # `await resume.wait()` suspension point before returning.
+    async_fire_time_changed(hass)
+
+    tracker.async_cancel()  # e.g. integration unload while the handler is still awaiting
+
+    resume.set()
+    await hass.async_block_till_done()
+
+    assert fired == [frozenset({"c1"})]
+    assert tracker._unsub is None  # not silently resurrected by the stale _fired
+    assert tracker._armed_at is None
 
 
 async def test_fired_only_covers_the_exact_instant(hass: HomeAssistant, freezer) -> None:

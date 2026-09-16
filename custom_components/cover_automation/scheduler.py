@@ -158,6 +158,9 @@ class ScheduleTracker:
 
     @callback
     def async_cancel(self) -> None:
+        self._generation += 1
+        self._armed_at = None
+        self._armed_covers = frozenset()
         if self._unsub is not None:
             self._unsub()
             self._unsub = None
