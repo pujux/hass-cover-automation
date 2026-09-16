@@ -1,0 +1,13 @@
+{
+  "codeowners": ["@julianpufler"],
+  "config_flow": true,
+  "dependencies": ["sun", "weather", "logbook"],
+  "documentation": "https://github.com/julianpufler/hass-cover-automation",
+  "domain": "cover_automation",
+  "integration_type": "hub",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/julianpufler/hass-cover-automation/issues",
+  "name": "Cover Automation",
+  "single_config_entry": true,
+  "version": "0.1.0"
+}
