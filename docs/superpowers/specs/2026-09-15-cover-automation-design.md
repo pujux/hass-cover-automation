@@ -138,8 +138,9 @@ or `suppress`, in this order:
 6. Desired `open` from the **shading** layer, by hub reopening mode: `passive` (default) →
    send only if the engine owns the current state; `active` → send; `off` → suppress.
    Schedule-layer opens are not subject to reopening mode (schedules are authoritative).
-7. Actual is `moving` → suppress until settled (wind and door excepted); the controller
-   surfaces this as the pending move and re-evaluates on the settle transition.
+7. Actual is `moving` → suppress until settled (wind and door excepted); a pending command
+   for the same target (confirm window not yet expired) → suppress for every layer; the
+   controller surfaces this as the pending move and re-evaluates on the settle transition.
 8. Shading-layer moves only: minimum interval since the **last engine command of any layer**
    on this cover (`min_move_interval`, default 10 min) → defer to the earliest allowed time
    (decision 21; this also damps the open-rule → shading and wind-release → shading

@@ -16,6 +16,7 @@ from custom_components.cover_automation.engine.model import (
     HubSignals,
     Layer,
     Owner,
+    Pending,
     ReopeningMode,
     Send,
     Suppress,
@@ -193,6 +194,32 @@ def test_moving_defers_non_protection_layers():
         T0,
     )
     assert a == Suppress("moving")
+
+
+def test_pending_command_for_the_same_target_suppresses_every_layer():
+    """Gate 7: a duplicate of the command already in flight is pointless on any layer."""
+
+    def rt() -> CoverRuntime:
+        return CoverRuntime(
+            pending=Pending(Target.CLOSED, Layer.SHADING, T0, T0),
+            last_send_at=T0 - timedelta(hours=1),
+        )
+
+    inputs = CoverInputs(CoverState.OPEN, door=DoorState.OPEN, door_last_changed=T0)
+    for layer in (Layer.SHADING, Layer.WIND, Layer.DOOR):
+        assert decide(
+            d(Desired.CLOSED, layer), CFG, CoverPersisted(), inputs, sig(), rt(), T0
+        ) == Suppress("in_flight")
+    # A pending close does not block the opposite target: wind still wins.
+    assert decide(
+        d(Desired.OPEN, Layer.WIND),
+        CFG,
+        CoverPersisted(),
+        CoverInputs(CoverState.MOVING),
+        sig(),
+        rt(),
+        T0,
+    ) == Send(Target.OPEN, Layer.WIND)
 
 
 def test_min_interval_applies_to_shading_only_and_uses_any_send():

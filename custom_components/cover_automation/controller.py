@@ -496,13 +496,6 @@ class CoverAutomationController:
         if not isinstance(action, Send):
             self._retry_at.pop(cover_id, None)
             return
-        pending = engine.rt.pending
-        if pending is not None and pending.target is action.target:
-            # The gate only suppresses while the cover reports `moving`; a device that has not
-            # reported yet would otherwise get the same command from every evaluation.
-            _LOGGER.debug("%s: command already in flight (%s)", cfg.name, action.target.value)
-            self._retry_at.pop(cover_id, None)
-            return
         verb = "open" if action.target is Target.OPEN else "close"
         if action.simulated:
             _LOGGER.info(
