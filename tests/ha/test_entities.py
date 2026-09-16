@@ -55,6 +55,8 @@ def fake_with_cover():
     ctrl.cover_views["sub1"] = CoverView(
         name="Bedroom", cover_entity="cover.bedroom", enabled=True, mode=Mode.AUTO
     )
+    ctrl.cover_names["sub1"] = "Bedroom"
+    return ctrl
 
 
 def fake_with_cover_views() -> FakeController:
