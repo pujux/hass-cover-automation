@@ -206,6 +206,21 @@ def test_new_override_does_not_inherit_dwell_from_previous_episode():
     assert e.p.dam is None  # 31 minutes: ends on its own schedule
 
 
+def test_decide_is_side_effect_free_and_matches_evaluate():
+    """I4: §5 wants the first decision before reconcile writes anything."""
+    e = CoverEngine(CFG, CoverPersisted(owner=Owner.USER, dam=Target.CLOSED, manual_move_at=T0))
+    e.rt.restoring_until = T0 + timedelta(minutes=5)
+    snapshot = e.p.to_dict()
+    inputs, signals = inp(actual=CoverState.OPEN), sig()
+    decision = e.decide(inputs, signals)
+    assert e.p.to_dict() == snapshot  # no dwell, no §1.5(e), no rule bookkeeping
+    assert e.rt.last_evaluation is None
+    assert e.rt.open_rule_satisfied_at is None
+    assert e.rt.last_settled is None
+    assert e.rt.restoring_until == T0 + timedelta(minutes=5)  # the window is only read
+    assert decision == e.evaluate(inputs, signals).decision
+
+
 def test_failed_command_retries_after_30s_without_a_min_interval_defer():
     """I1: a command that never reached the cover must not start the interval clock."""
     e = CoverEngine(CFG, CoverPersisted(owner=Owner.ENGINE, engine_target=Target.OPEN))

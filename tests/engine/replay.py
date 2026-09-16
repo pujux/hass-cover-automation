@@ -191,7 +191,8 @@ class Sim:
                 self.profile, self.now, self.sun, self.actual, persisted.manual_move_at
             )
             # runtime is lost on restart: open_rule_satisfied_at starts as None on purpose
-        first = self.engine.evaluate(
+        # Spec §5: the first decision is computed before reconcile writes anything.
+        first = self.engine.decide(
             CoverInputs(
                 actual=self.actual,
                 door=self.door,
@@ -214,4 +215,4 @@ class Sim:
                 self.simulation,
             ),
         )
-        self.engine.reconcile(self.actual, first.decision, self.now)
+        self.engine.reconcile(self.actual, first, self.now)

@@ -26,6 +26,20 @@ from .signals import ContinuousCondition
 
 
 class CoverEngine:
+    """Per-cover facade over the layer stack, override lifecycle, gate and reconcile.
+
+    Startup order (spec §5): `decide(inputs, signals)` produces the first decision from the
+    persisted `owner`/`manual_move_at` without touching any state, `reconcile(actual,
+    decision, now)` consumes it, and only then does `evaluate()` run and its action get
+    acted on. Calling `evaluate()` first claims ownership for a command in flight (decision
+    20) and `reconcile` would then record that command as a manual move.
+
+    Persistence contract: the controller schedules a delayed Store save after every
+    `evaluate` -- the dwell, §1.5(e) and a rule firing all mutate the persisted scalars --
+    and saves immediately after `on_command_sent`, `reset`, `reconcile` and a transition
+    classified as MANUAL.
+    """
+
     def __init__(
         self,
         config: CoverConfig,
@@ -40,6 +54,12 @@ class CoverEngine:
         self.rt.override_dwell = ContinuousCondition(override_dwell_s)
 
     # -- evaluation -----------------------------------------------------------------
+
+    def decide(self, inputs: CoverInputs, signals: HubSignals) -> Decision:
+        """The layer stack alone: no timers, no bookkeeping, no gate (spec §5 startup)."""
+        rt = self.rt
+        restoring = rt.restoring_until is not None and signals.now < rt.restoring_until
+        return layers.evaluate(self.config, self.p, inputs, signals, restoring=restoring)
 
     def evaluate(
         self, inputs: CoverInputs, signals: HubSignals, *, rule_fired: bool = False
