@@ -3,7 +3,8 @@ from __future__ import annotations
 from custom_components.cover_automation import const
 from custom_components.cover_automation.engine.model import Owner
 from homeassistant.config_entries import ConfigEntryState, ConfigSubentry
-from homeassistant.core import HomeAssistant
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 
@@ -156,3 +157,100 @@ async def test_stale_cover_device_can_be_removed(hass: HomeAssistant, hub_entry)
         config_entry_id=hub_entry.entry_id, identifiers={(const.DOMAIN, "gone")}
     )
     assert await async_remove_config_entry_device(hass, hub_entry, stale)
+
+
+async def test_missing_profile_reference_is_cleared(hass: HomeAssistant, hub_entry) -> None:
+    hass.config_entries.async_add_subentry(
+        hub_entry,
+        ConfigSubentry(**cover_subentry_data("cover.bedroom", schedule_profile="does_not_exist")),
+    )
+    set_cover(hass, "cover.bedroom")
+    await setup_hub(hass, hub_entry)
+
+    cover_sub = next(iter(hub_entry.subentries.values()))
+    cfg, bind = hub_entry.runtime_data.covers[cover_sub.subentry_id]
+    assert cfg.profile_id is None
+    assert bind.profile_id is None
+    issue = ir.async_get(hass).async_get_issue(
+        const.DOMAIN, f"missing_profile_{cover_sub.subentry_id}"
+    )
+    assert issue is not None and issue.translation_key == "missing_profile"
+
+
+async def test_missing_optional_sensor_deferred_until_started_then_present(
+    hass: HomeAssistant, hub_entry
+) -> None:
+    hass.set_state(CoreState.starting)
+    set_weather(hass)
+    set_sun(hass)
+    assert await hass.config_entries.async_setup(hub_entry.entry_id)
+    await hass.async_block_till_done()
+    issue_id = f"missing_entity_{hub_entry.entry_id}_sensor.wind"
+    assert ir.async_get(hass).async_get_issue(const.DOMAIN, issue_id) is None
+
+    set_sensor(hass, "sensor.wind", 5, unit="km/h", device_class="wind_speed")
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+    assert ir.async_get(hass).async_get_issue(const.DOMAIN, issue_id) is None
+
+
+async def test_missing_optional_sensor_still_missing_after_started(
+    hass: HomeAssistant, hub_entry
+) -> None:
+    hass.set_state(CoreState.starting)
+    set_weather(hass)
+    set_sun(hass)
+    assert await hass.config_entries.async_setup(hub_entry.entry_id)
+    await hass.async_block_till_done()
+    issue_id = f"missing_entity_{hub_entry.entry_id}_sensor.wind"
+    assert ir.async_get(hass).async_get_issue(const.DOMAIN, issue_id) is None
+
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+    issue = ir.async_get(hass).async_get_issue(const.DOMAIN, issue_id)
+    assert issue is not None and issue.translation_key == "missing_entity"
+
+
+async def test_missing_entity_issue_clears_on_reload(hass: HomeAssistant, hub_entry) -> None:
+    set_weather(hass)
+    set_sun(hass)
+    assert await hass.config_entries.async_setup(hub_entry.entry_id)
+    await hass.async_block_till_done()
+    issue_id = f"missing_entity_{hub_entry.entry_id}_sensor.wind"
+    assert ir.async_get(hass).async_get_issue(const.DOMAIN, issue_id) is not None
+
+    set_sensor(hass, "sensor.wind", 5, unit="km/h", device_class="wind_speed")
+    assert await hass.config_entries.async_reload(hub_entry.entry_id)
+    await hass.async_block_till_done()
+    assert ir.async_get(hass).async_get_issue(const.DOMAIN, issue_id) is None
+
+
+async def test_removed_cover_subentry_clears_its_issues(hass: HomeAssistant, hub_entry) -> None:
+    hass.config_entries.async_add_subentry(
+        hub_entry,
+        ConfigSubentry(**cover_subentry_data("cover.bedroom", door_sensor="binary_sensor.door")),
+    )
+    set_cover(hass, "cover.bedroom")
+    await setup_hub(hass, hub_entry)
+    cover_sub = next(iter(hub_entry.subentries.values()))
+    issue_id = f"missing_entity_{hub_entry.entry_id}_binary_sensor.door"
+    assert ir.async_get(hass).async_get_issue(const.DOMAIN, issue_id) is not None
+
+    hass.config_entries.async_remove_subentry(hub_entry, cover_sub.subentry_id)
+    await hass.async_block_till_done()
+    assert hub_entry.state is ConfigEntryState.LOADED
+    assert hub_entry.runtime_data.covers == {}
+    assert ir.async_get(hass).async_get_issue(const.DOMAIN, issue_id) is None
+
+
+async def test_remove_entry_clears_open_issues(hass: HomeAssistant, hub_entry) -> None:
+    set_weather(hass)
+    set_sun(hass)
+    assert await hass.config_entries.async_setup(hub_entry.entry_id)
+    await hass.async_block_till_done()
+    issue_id = f"missing_entity_{hub_entry.entry_id}_sensor.wind"
+    assert ir.async_get(hass).async_get_issue(const.DOMAIN, issue_id) is not None
+
+    await hass.config_entries.async_remove(hub_entry.entry_id)
+    await hass.async_block_till_done()
+    assert ir.async_get(hass).async_get_issue(const.DOMAIN, issue_id) is None

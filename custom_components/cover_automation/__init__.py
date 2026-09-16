@@ -5,7 +5,9 @@ wind, frost, door sensors and schedules. Setup order per spec §5.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from collections.abc import Iterable
+from dataclasses import dataclass, field, replace
+from functools import partial
 
 from homeassistant.components.weather.const import WeatherEntityFeature
 from homeassistant.config_entries import ConfigEntry
@@ -13,6 +15,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.start import async_at_started
 
 from . import const
 from .config_map import CoverBindings, HubConfig, cover_config, hub_config, profile
@@ -22,6 +25,7 @@ from .store import CoverAutomationStore
 
 _LOGGER = logging.getLogger(__name__)
 SUN_ENTITY = "sun.sun"
+_PROFILE_ISSUE_PREFIX = "missing_profile_"
 
 
 @dataclass(slots=True)
@@ -41,6 +45,10 @@ def _missing_entity_issue_id(entry: ConfigEntry, entity_id: str) -> str:
     return f"missing_entity_{entry.entry_id}_{entity_id}"
 
 
+def _missing_profile_issue_id(subentry_id: str) -> str:
+    return f"{_PROFILE_ISSUE_PREFIX}{subentry_id}"
+
+
 def _validate_required_entities(hass: HomeAssistant, hub: HubConfig) -> None:
     """Weather (with daily forecast) and sun.sun must exist, otherwise retry (spec §5)."""
     weather = hass.states.get(hub.weather_entity)
@@ -54,13 +62,10 @@ def _validate_required_entities(hass: HomeAssistant, hub: HubConfig) -> None:
         raise ConfigEntryNotReady("sun.sun is not available yet")
 
 
-def _check_optional_entities(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    hub: HubConfig,
-    covers: dict[str, tuple[CoverConfig, CoverBindings]],
+def _optional_entity_ids(
+    hub: HubConfig, covers: dict[str, tuple[CoverConfig, CoverBindings]]
 ) -> list[str]:
-    """Missing optional sensors do not block setup; they raise repair issues (spec §5)."""
+    """Entities that are nice to have; missing ones get a repair but never block setup (spec §5)."""
     wanted: list[str] = [
         e
         for e in (
@@ -73,6 +78,57 @@ def _check_optional_entities(
     ]
     for _cfg, bind in covers.values():
         wanted.extend(e for e in (bind.cover_entity, bind.door_sensor, bind.room_sensor) if e)
+    return wanted
+
+
+def _entry_issue_ids(entry: ConfigEntry, wanted_entities: Iterable[str]) -> set[str]:
+    """Issue ids this entry currently owns: still-configured entities and cover subentries."""
+    ids = {_missing_entity_issue_id(entry, e) for e in wanted_entities}
+    ids.update(
+        _missing_profile_issue_id(s.subentry_id)
+        for s in entry.get_subentries_of_type(const.SUBENTRY_COVER)
+    )
+    return ids
+
+
+def _delete_stale_issues(
+    hass: HomeAssistant, entry: ConfigEntry, owned_issue_ids: set[str]
+) -> None:
+    """Delete issues HA never clears on its own: ones whose reference has disappeared.
+
+    `missing_entity_*` and `missing_profile_*` issues are only ever created or cleared for
+    entities/subentries that are still configured (see `_async_check_optional_entities` and
+    `async_setup_entry`). Once a reference disappears -- the wind sensor is cleared, a cover
+    subentry is deleted, or the whole entry is removed (call with `owned_issue_ids=set()`) --
+    nothing else deletes its issue, so it would otherwise linger in Repairs forever. Matching
+    `missing_profile_*` issues by a bare prefix (not scoped to this entry's current subentries)
+    is safe because the integration is `single_config_entry`: only one hub entry ever exists.
+    """
+    registry = ir.async_get(hass)
+    entity_prefix = f"missing_entity_{entry.entry_id}_"
+    stale = [
+        issue_id
+        for domain, issue_id in registry.issues
+        if domain == const.DOMAIN
+        and issue_id not in owned_issue_ids
+        and (issue_id.startswith(entity_prefix) or issue_id.startswith(_PROFILE_ISSUE_PREFIX))
+    ]
+    for issue_id in stale:
+        ir.async_delete_issue(hass, const.DOMAIN, issue_id)
+
+
+async def _async_check_optional_entities(
+    hass: HomeAssistant,
+    entry: CoverAutomationConfigEntry,
+    hub: HubConfig,
+    covers: dict[str, tuple[CoverConfig, CoverBindings]],
+) -> None:
+    """Create/clear missing-entity repairs once HA has started (spec §5).
+
+    Deferred past startup so a slower-starting integration (MQTT, ESPHome, a template sensor)
+    doesn't get flagged missing before its entity has had a chance to register its state.
+    """
+    wanted = _optional_entity_ids(hub, covers)
     missing = [e for e in wanted if hass.states.get(e) is None]
     for entity_id in wanted:
         issue_id = _missing_entity_issue_id(entry, entity_id)
@@ -88,7 +144,7 @@ def _check_optional_entities(
             )
         else:
             ir.async_delete_issue(hass, const.DOMAIN, issue_id)
-    return missing
+    entry.runtime_data.missing_entities = missing
 
 
 @callback
@@ -130,22 +186,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: CoverAutomationConfigEnt
     covers: dict[str, tuple[CoverConfig, CoverBindings]] = {}
     for subentry in entry.get_subentries_of_type(const.SUBENTRY_COVER):
         cfg, bind = cover_config(subentry, hub)
+        issue_id = _missing_profile_issue_id(subentry.subentry_id)
         if cfg.profile_id is not None and cfg.profile_id not in profiles:
             _LOGGER.warning(
                 "Cover %s references missing profile %s; treating as none", cfg.name, cfg.profile_id
             )
+            cfg = replace(cfg, profile_id=None)
+            bind = replace(bind, profile_id=None)
             ir.async_create_issue(
                 hass,
                 const.DOMAIN,
-                f"missing_profile_{subentry.subentry_id}",
+                issue_id,
                 is_fixable=False,
                 severity=ir.IssueSeverity.WARNING,
                 translation_key="missing_profile",
                 translation_placeholders={"cover": cfg.name},
             )
         else:
-            ir.async_delete_issue(hass, const.DOMAIN, f"missing_profile_{subentry.subentry_id}")
+            ir.async_delete_issue(hass, const.DOMAIN, issue_id)
         covers[subentry.subentry_id] = (cfg, bind)
+
+    wanted_entities = _optional_entity_ids(hub, covers)
+    _delete_stale_issues(hass, entry, _entry_issue_ids(entry, wanted_entities))
 
     hub_device_id = ensure_devices(hass, entry)
     store = CoverAutomationStore(hass, entry.entry_id)
@@ -159,11 +221,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: CoverAutomationConfigEnt
         profiles=profiles,
         store=store,
         hub_device_id=hub_device_id,
-        missing_entities=_check_optional_entities(hass, entry, hub, covers),
     )
 
     await hass.config_entries.async_forward_entry_setups(entry, const.PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    entry.async_on_unload(
+        async_at_started(
+            hass, partial(_async_check_optional_entities, entry=entry, hub=hub, covers=covers)
+        )
+    )
     return True
 
 
@@ -179,6 +245,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: CoverAutomationConfigEn
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     await CoverAutomationStore(hass, entry.entry_id).async_remove()
+    _delete_stale_issues(hass, entry, owned_issue_ids=set())
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
