@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -327,15 +328,9 @@ async def test_stop_cancels_everything(hass, hub_entry, cover_services, freezer)
     )  # nothing ran after stop (and no lingering timers at teardown)
 
 
-async def test_schedule_rule_fires_and_updates_views(hass, hub_entry, freezer):
+async def test_schedule_rule_fires_and_updates_views(hass, hub_entry, cover_services, freezer):
     """A fixed close rule fires, commands the cover and lands in the hub and cover views."""
-    closes: list[ServiceCall] = []
-
-    async def close(call: ServiceCall) -> None:
-        closes.append(call)
-        set_cover(hass, "cover.bedroom", state="closed", position=0)
-
-    hass.services.async_register("cover", "close_cover", close)
+    closes = cover_services["close"]
     # The 07:00 open rule keeps yesterday's 21:30 close rule from holding the cover shut at
     # 21:00 (a close rule is a standing hold until the next rule fires).
     rules = [
@@ -436,3 +431,53 @@ async def test_midnight_task_after_stop_arms_nothing(hass, hub_entry, cover_serv
     await hass.async_block_till_done()
     assert controller._schedule._unsub is None
     assert len(cover_services["close"]) == commands  # nothing evaluated after the stop
+
+
+async def test_command_in_flight_is_not_resent(hass, hub_entry, cover_services, freezer):
+    """A pending command is never re-sent while the cover has not reported back yet."""
+    controller, sub_id = await start_controller(
+        hass,
+        hub_entry,
+        cover_overrides={
+            const.CONF_WIND_ENABLED: True,
+            const.CONF_WIND_UPPER: 60,
+            const.CONF_WIND_LOWER: 50,
+            const.CONF_WIND_UNIT: "km/h",
+        },
+    )
+    try:
+        set_cover(hass, "cover.bedroom", state="closed", position=0)
+        await hass.async_block_till_done()
+        set_sensor(hass, "sensor.wind", 75.0, unit="km/h", device_class="wind_speed")
+        await hass.async_block_till_done()
+        assert len(cover_services["open"]) == 1
+        assert controller.engine(sub_id).rt.pending is not None
+        # The wind layer skips the minimum-interval gate, so only the in-flight guard can
+        # keep these evaluations from re-sending the open the cover has not confirmed yet.
+        await controller.async_evaluate_now()
+        await controller.async_evaluate_now({sub_id})
+        await hass.async_block_till_done()
+        assert len(cover_services["open"]) == 1
+    finally:
+        await controller.async_stop()
+
+
+async def test_evaluation_waiting_on_a_lock_does_nothing_after_stop(
+    hass, hub_entry, cover_services, freezer
+):
+    """A task queued on a contended per-cover lock must not act or arm a timer after stop."""
+    controller, sub_id = await start_controller(hass, hub_entry)
+    commands = len(cover_services["close"])
+    lock = controller._locks[sub_id]
+    await lock.acquire()
+    evaluation = hass.async_create_task(controller.async_evaluate())
+    await asyncio.sleep(0)
+    stop = hass.async_create_task(controller.async_stop())
+    await asyncio.sleep(0)
+    assert not controller.started  # `async_stop` is now draining the locks
+    lock.release()
+    await stop
+    await evaluation
+    await hass.async_block_till_done()
+    assert len(cover_services["close"]) == commands
+    assert controller._cover_timers == {}

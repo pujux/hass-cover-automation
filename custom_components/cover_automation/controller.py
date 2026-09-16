@@ -331,6 +331,9 @@ class CoverAutomationController:
                     continue
                 try:
                     async with self._locks[cover_id]:
+                        if not self.started:
+                            # This task was queued on a contended lock before `async_stop`.
+                            return
                         await self._evaluate_cover(
                             cover_id, at, sun, hub_sig, cover_id in rule_fired
                         )
@@ -419,6 +422,12 @@ class CoverAutomationController:
         self._update_frost_conflict(cover_id, result)
         if not isinstance(action, Send):
             return
+        pending = engine.rt.pending
+        if pending is not None and pending.target is action.target:
+            # The gate only suppresses while the cover reports `moving`; a device that has not
+            # reported yet would otherwise get the same command from every evaluation.
+            _LOGGER.debug("%s: command already in flight (%s)", cfg.name, action.target.value)
+            return
         verb = "open" if action.target is Target.OPEN else "close"
         if action.simulated:
             _LOGGER.info(
@@ -505,6 +514,8 @@ class CoverAutomationController:
     ) -> None:
         if cancel := self._cover_timers.pop(cover_id, None):
             cancel()
+        if not self.started:
+            return
         candidates = [
             c
             for c in (
