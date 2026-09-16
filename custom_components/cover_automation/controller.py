@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable, Mapping
+from collections.abc import Coroutine, Iterable, Mapping
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from functools import partial
@@ -16,6 +16,7 @@ from homeassistant.components.cover import DOMAIN as COVER_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_ENTITY_ID,
+    EVENT_CORE_CONFIG_UPDATE,
     SERVICE_CLOSE_COVER,
     SERVICE_OPEN_COVER,
     SERVICE_SET_COVER_POSITION,
@@ -228,6 +229,16 @@ class CoverAutomationController:
                 pass
         await self._store.async_save()
 
+    def _create_task(self, coro: Coroutine[Any, Any, None], name: str) -> None:
+        """Run a callback's follow-up work on a task tied to the entry (F9).
+
+        `hass.async_create_task` would outlive a reload: these tasks evaluate covers and save
+        the Store, so they belong to the entry that owns them and must be cancelled with it.
+        """
+        self.entry.async_create_background_task(
+            self.hass, coro, name=f"{const.DOMAIN} {name}", eager_start=True
+        )
+
     @callback
     def _async_cancel_all(self) -> None:
         for unsub in self._unsubs:
@@ -273,6 +284,9 @@ class CoverAutomationController:
         self._unsubs.append(
             hass.bus.async_listen(ir.EVENT_REPAIRS_ISSUE_REGISTRY_UPDATED, self._on_issue_event)
         )
+        self._unsubs.append(
+            hass.bus.async_listen(EVENT_CORE_CONFIG_UPDATE, self._on_core_config_update)
+        )
 
     # -- triggers ----------------------------------------------------------------------
 
@@ -281,9 +295,9 @@ class CoverAutomationController:
         entity_id = event.data["entity_id"]
         affected = self._watched.get(entity_id)
         if entity_id == self.hub.weather_entity:
-            self.hass.async_create_task(self._async_weather_changed())
+            self._create_task(self._async_weather_changed(), "weather changed")
             return
-        self.hass.async_create_task(self.async_evaluate(cover_ids=affected))
+        self._create_task(self.async_evaluate(cover_ids=affected), "state change")
 
     async def _async_weather_changed(self) -> None:
         if not self.started:
@@ -294,7 +308,7 @@ class CoverAutomationController:
 
     @callback
     def _on_midnight(self, _now: datetime) -> None:
-        self.hass.async_create_task(self._async_midnight())
+        self._create_task(self._async_midnight(), "midnight rollover")
 
     async def _async_midnight(self) -> None:
         if not self.started:
@@ -309,7 +323,7 @@ class CoverAutomationController:
 
     @callback
     def _on_forecast_tick(self, _now: datetime) -> None:
-        self.hass.async_create_task(self._async_forecast_tick())
+        self._create_task(self._async_forecast_tick(), "forecast refresh")
 
     async def _async_forecast_tick(self) -> None:
         if not self.started:
@@ -320,7 +334,19 @@ class CoverAutomationController:
 
     @callback
     def _on_fallback_tick(self, _now: datetime) -> None:
-        self.hass.async_create_task(self.async_evaluate())
+        self._create_task(self.async_evaluate(), "fallback tick")
+
+    @callback
+    def _on_core_config_update(self, _event: Event[Any]) -> None:
+        self._create_task(self._async_core_config_updated(), "core config update")
+
+    async def _async_core_config_updated(self) -> None:
+        """A new time zone or location moves every sun and schedule time (spec §2, §5)."""
+        if not self.started:
+            return
+        now = dt_util.utcnow()
+        self._schedule.async_arm(now)
+        await self.async_evaluate(now)
 
     @callback
     def _on_issue_event(self, event: Event[Any]) -> None:
@@ -508,6 +534,10 @@ class CoverAutomationController:
             service = SERVICE_SET_COVER_POSITION
             data = {ATTR_ENTITY_ID: bind.cover_entity, ATTR_POSITION: 100 if verb == "open" else 0}
         engine.on_command_sent(action, now)
+        # Ownership is claimed at send time (decision 20), so it is persisted before the
+        # blocking call: a restart (or crash) while the cover is still travelling must not
+        # come back believing the move it just ordered was somebody else's.
+        await self._store.async_save()
         try:
             await self.hass.services.async_call(COVER_DOMAIN, service, data, blocking=True)
         except HomeAssistantError as err:
@@ -517,7 +547,6 @@ class CoverAutomationController:
             return
         self._retry_at.pop(cover_id, None)
         self._last_engine_move[cover_id] = now
-        await self._store.async_save()
         self._fire_action_event(cover_id, verb, decision, simulated=False)
 
     def _update_frost_conflict(self, cover_id: str, result: StepResult) -> None:
@@ -540,6 +569,7 @@ class CoverAutomationController:
             )
         elif result.decision.layer is not Layer.FROST:
             repairs.set_issue(self.hass, issue_id, False, translation_key="frost_conflict")
+            persistent_notification.async_dismiss(self.hass, f"{const.DOMAIN}_frost_{cover_id}")
 
     def _fire_action_event(
         self, cover_id: str, verb: str, decision: Decision, *, simulated: bool
@@ -592,13 +622,17 @@ class CoverAutomationController:
     @callback
     def _on_cover_timer(self, cover_id: str, _now: datetime) -> None:
         self._cover_timers.pop(cover_id, None)
-        self.hass.async_create_task(self._async_cover_timer(cover_id))
+        self._create_task(self._async_cover_timer(cover_id), "cover timer")
 
     async def _async_cover_timer(self, cover_id: str) -> None:
         if not self.started:
             return
         now = dt_util.utcnow()
         async with self._locks[cover_id]:
+            if not self.started:
+                # `async_stop` ran while this task waited for the lock; its final save has
+                # already happened, so a straggler must not write the Store behind it.
+                return
             await self._async_check_pending(cover_id, now)
         await self.async_evaluate(now, cover_ids={cover_id})
 

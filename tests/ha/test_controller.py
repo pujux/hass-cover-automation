@@ -18,6 +18,7 @@ from custom_components.cover_automation.engine.model import (
 )
 from custom_components.cover_automation.forecast import TodayForecast
 from homeassistant.config_entries import ConfigSubentry
+from homeassistant.const import EVENT_CORE_CONFIG_UPDATE
 from homeassistant.core import CoreState, HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
@@ -653,3 +654,22 @@ async def test_views_are_seeded_from_the_store_before_start(hass, hub_entry, cov
     hub = controller.hub_view
     assert hub.shading_mode is ShadingMode.OFF and hub.reopening_mode is ReopeningMode.ACTIVE
     assert hub.simulation is True and hub.verbose is True
+
+
+async def test_core_config_update_rearms_the_schedule_and_evaluates(
+    hass, hub_entry, cover_services, freezer
+):
+    """F6: a time-zone/location change moves every schedule time (spec §2/§5)."""
+    controller, sub_id = await start_controller(
+        hass, hub_entry, profile=profile_subentry_data("Night", quiet=None)
+    )
+    try:
+        unsub_before = controller._schedule._unsub
+        view_before = controller.cover_views[sub_id]
+        assert unsub_before is not None
+        hass.bus.async_fire(EVENT_CORE_CONFIG_UPDATE)
+        await hass.async_block_till_done()
+        assert controller._schedule._unsub is not unsub_before  # re-armed
+        assert controller.cover_views[sub_id] is not view_before  # and re-evaluated
+    finally:
+        await controller.async_stop()
