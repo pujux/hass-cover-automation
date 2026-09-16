@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from homeassistant.components.cover import ATTR_CURRENT_POSITION, CoverEntityFeature
 from homeassistant.components.sun.const import STATE_ATTR_AZIMUTH, STATE_ATTR_ELEVATION
@@ -104,14 +104,17 @@ class HubSignalSource:
         return None if state is None or state.state in _UNUSABLE else state
 
     def _raw_sunny(self, now: datetime) -> bool | None:
-        if self.hub.sunny_override_entity:
-            return _binary(self.hass.states.get(self.hub.sunny_override_entity))
+        # Weather availability is tracked unconditionally: even with a sunny override
+        # configured, the weather entity remains the frost fallback and forecast source,
+        # so `weather_unavailable_beyond_grace()` must still reflect its real state.
         weather = self._weather()
-        condition = self._condition.update(weather.state if weather else None, now)
         if weather is None:
             self._weather_unavailable_since = self._weather_unavailable_since or now
         else:
             self._weather_unavailable_since = None
+        if self.hub.sunny_override_entity:
+            return _binary(self.hass.states.get(self.hub.sunny_override_entity))
+        condition = self._condition.update(weather.state if weather else None, now)
         return None if condition is None else condition in self.hub.sunny_conditions
 
     def _outdoor_c(self) -> float | None:
@@ -161,7 +164,16 @@ class HubSignalSource:
         )
 
     def next_check_at(self) -> datetime | None:
-        return self._sunny.next_change_at()
+        candidates = [self._sunny.next_change_at()]
+        if self._weather_unavailable_since is not None:
+            candidates.append(
+                self._weather_unavailable_since + timedelta(seconds=self.hub.weather_grace_s)
+            )
+        if self._forecast_failed_since is not None:
+            candidates.append(
+                self._forecast_failed_since + timedelta(seconds=self.hub.weather_grace_s)
+            )
+        return min((c for c in candidates if c is not None), default=None)
 
     # -- views -----------------------------------------------------------------------
     @property
@@ -184,7 +196,7 @@ class HubSignalSource:
 
     @property
     def frost_source_unavailable(self) -> bool:
-        return bool(self.hub.outdoor_temperature_sensor) and self._outdoor_c() is None
+        return self._outdoor_c() is None
 
     @property
     def wind_sensor_unavailable(self) -> bool:

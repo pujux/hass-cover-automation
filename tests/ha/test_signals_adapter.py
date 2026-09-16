@@ -90,6 +90,38 @@ async def test_sunny_debounce_grace_and_override(hass: HomeAssistant, hub_entry,
     assert src2.sunny_state is True
 
 
+async def test_weather_availability_tracked_even_with_sunny_override(
+    hass: HomeAssistant, hub_entry
+):
+    """The weather entity is still the frost fallback/forecast source when overridden."""
+    now = dt_util.utcnow()
+    hass.config_entries.async_update_entry(
+        hub_entry,
+        options={
+            **hub_entry.options,
+            const.CONF_SUNNY_OVERRIDE_ENTITY: "binary_sensor.force_sunny",
+        },
+    )
+    hass.states.async_set("binary_sensor.force_sunny", "on")
+    hass.states.async_set(WEATHER, "unavailable")
+    src = HubSignalSource(hass, hub_config(hub_entry), DailyLatch())
+    src.seed(now)
+    assert src.sunny_state is True  # the override still wins
+    assert src.weather_unavailable_beyond_grace(now + timedelta(minutes=30))
+
+
+async def test_next_check_at_includes_weather_and_forecast_grace_expiry(
+    hass: HomeAssistant, hub_entry
+):
+    now = dt_util.utcnow()
+    set_weather(hass, condition="sunny")
+    src = HubSignalSource(hass, hub_config(hub_entry), DailyLatch())
+    src.seed(now)
+    hass.states.async_set(WEATHER, "unavailable")
+    src.update(now)
+    assert src.next_check_at() == now + timedelta(seconds=1800)  # weather_grace_s
+
+
 async def test_frost_from_fahrenheit_sensor(hass: HomeAssistant, hub_entry):
     hass.config_entries.async_update_entry(
         hub_entry, data={**hub_entry.data, const.CONF_OUTDOOR_TEMPERATURE_SENSOR: "sensor.outdoor"}
@@ -118,6 +150,17 @@ async def test_frost_falls_back_to_weather_temperature(hass: HomeAssistant, hub_
     src = HubSignalSource(hass, hub_config(hub_entry), DailyLatch())
     src.seed(now)
     assert src.frost.active is True
+
+
+async def test_frost_source_unavailable_when_weather_lacks_temperature(
+    hass: HomeAssistant, hub_entry
+):
+    """No outdoor sensor configured, and the mandatory weather entity has no reading."""
+    now = dt_util.utcnow()
+    hass.states.async_set(WEATHER, "sunny", {"supported_features": 1})  # no "temperature" attr
+    src = HubSignalSource(hass, hub_config(hub_entry), DailyLatch())
+    src.seed(now)
+    assert src.frost_source_unavailable is True
 
 
 async def test_hot_day_latches_and_forecast_failure_is_tracked(hass: HomeAssistant, hub_entry):
