@@ -26,3 +26,4 @@ config/home-assistant_v2.db*
 
 # Parallel task worktrees
 .worktrees/
+.venv
