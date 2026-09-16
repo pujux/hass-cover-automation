@@ -67,7 +67,7 @@ async def test_sunny_debounce_grace_and_override(hass: HomeAssistant, hub_entry,
     # completes at now+5min+20min=now+25min, not now+20min.
     src.update(now + timedelta(minutes=5))
     assert src.sunny_state is True  # off delay 20 min from the observation at +5min
-    assert src.next_check_at() == now + timedelta(minutes=25)
+    assert src.next_check_at(now + timedelta(minutes=5)) == now + timedelta(minutes=25)
     src.update(now + timedelta(minutes=26))
     assert src.sunny_state is False
     hass.states.async_set(WEATHER, "unavailable")
@@ -119,7 +119,7 @@ async def test_next_check_at_includes_weather_and_forecast_grace_expiry(
     src.seed(now)
     hass.states.async_set(WEATHER, "unavailable")
     src.update(now)
-    assert src.next_check_at() == now + timedelta(seconds=1800)  # weather_grace_s
+    assert src.next_check_at(now) == now + timedelta(seconds=1800)  # weather_grace_s
 
 
 async def test_frost_from_fahrenheit_sensor(hass: HomeAssistant, hub_entry):

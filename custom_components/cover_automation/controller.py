@@ -438,13 +438,18 @@ class CoverAutomationController:
         cfg, bind = self._covers[cover_id]
         decision, action = result.decision, result.action
         self._update_frost_conflict(cover_id, result)
+        # A retry deadline only outlives this evaluation when a real command goes out and
+        # fails again: every path that sends nothing drops it, or a resolved disagreement
+        # would leave a permanently expired timer candidate behind (F1).
         if not isinstance(action, Send):
+            self._retry_at.pop(cover_id, None)
             return
         pending = engine.rt.pending
         if pending is not None and pending.target is action.target:
             # The gate only suppresses while the cover reports `moving`; a device that has not
             # reported yet would otherwise get the same command from every evaluation.
             _LOGGER.debug("%s: command already in flight (%s)", cfg.name, action.target.value)
+            self._retry_at.pop(cover_id, None)
             return
         verb = "open" if action.target is Target.OPEN else "close"
         if action.simulated:
@@ -456,6 +461,7 @@ class CoverAutomationController:
                 decision.reason,
             )
             engine.on_command_sent(action, now)
+            self._retry_at.pop(cover_id, None)
             self._fire_action_event(cover_id, verb, decision, simulated=True)
             return
         open_close, set_position = cover_supports(self.hass.states.get(bind.cover_entity))
@@ -468,6 +474,7 @@ class CoverAutomationController:
             placeholders={"cover": cfg.name},
         )
         if unsupported:
+            self._retry_at.pop(cover_id, None)
             return
         if open_close:
             service = SERVICE_OPEN_COVER if verb == "open" else SERVICE_CLOSE_COVER
@@ -534,16 +541,22 @@ class CoverAutomationController:
             cancel()
         if not self.started:
             return
+        # Only deadlines that are still ahead are worth waiting for; a signal source whose
+        # deadline has passed re-reports it until its state actually changes, so an expired
+        # one would re-arm this timer every second (F1). `result.next_check_at` is the
+        # exception: an expired pending deadline genuinely needs a prompt `check_pending`,
+        # and that call clears the pending record, so it cannot arm twice for the same one.
         candidates = [
             c
             for c in (
-                result.next_check_at,
                 sig.next_check_at(),
-                self._hub_signals.next_check_at(),
+                self._hub_signals.next_check_at(now),
                 self._retry_at.get(cover_id),
             )
-            if c is not None
+            if c is not None and c > now
         ]
+        if result.next_check_at is not None:
+            candidates.append(result.next_check_at)
         if not candidates:
             return
         delay = max(1.0, (min(candidates) - now).total_seconds())

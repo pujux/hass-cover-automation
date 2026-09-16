@@ -163,16 +163,19 @@ class HubSignalSource:
             simulation=store.simulation,
         )
 
-    def next_check_at(self) -> datetime | None:
+    def next_check_at(self, now: datetime) -> datetime | None:
+        """When the hub signals would next change on their own, or None.
+
+        A grace expiry that has already passed is dropped: `_weather_unavailable_since` and
+        `_forecast_failed_since` stay set for the whole outage, so an elapsed expiry would
+        otherwise remain a permanent "check again now" candidate and re-arm a timer every
+        second for as long as the source is down.
+        """
         candidates = [self._sunny.next_change_at()]
-        if self._weather_unavailable_since is not None:
-            candidates.append(
-                self._weather_unavailable_since + timedelta(seconds=self.hub.weather_grace_s)
-            )
-        if self._forecast_failed_since is not None:
-            candidates.append(
-                self._forecast_failed_since + timedelta(seconds=self.hub.weather_grace_s)
-            )
+        grace = timedelta(seconds=self.hub.weather_grace_s)
+        for since in (self._weather_unavailable_since, self._forecast_failed_since):
+            if since is not None and since + grace > now:
+                candidates.append(since + grace)
         return min((c for c in candidates if c is not None), default=None)
 
     # -- views -----------------------------------------------------------------------

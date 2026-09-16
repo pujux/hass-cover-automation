@@ -13,6 +13,7 @@ from homeassistant.config_entries import ConfigSubentry
 from homeassistant.core import CoreState, HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import (
     async_capture_events,
@@ -21,6 +22,7 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from tests.ha.conftest import (
+    WEATHER,
     cover_subentry_data,
     profile_subentry_data,
     set_cover,
@@ -535,3 +537,54 @@ async def test_stop_during_start_leaves_nothing_running(hass, hub_entry, cover_s
     assert controller._unsubs == []
     assert controller._schedule._unsub is None
     assert not cover_services["close"]
+
+
+async def test_expired_weather_grace_stops_arming_the_cover_timer(
+    hass, hub_entry, cover_services, freezer
+):
+    """F1: a grace expiry that has passed is no longer a timer candidate (no 1 Hz loop)."""
+    controller, sub_id = await start_controller(hass, hub_entry)
+    try:
+        set_cover(hass, "cover.bedroom", state="closed", position=0)
+        await hass.async_block_till_done()
+        assert controller.engine(sub_id).rt.pending is None
+        hass.states.async_set(WEATHER, "unavailable")
+        await hass.async_block_till_done()
+        assert sub_id in controller._cover_timers  # armed for the grace expiry itself
+        with (
+            patch(
+                "custom_components.cover_automation.controller.async_fetch_today",
+                AsyncMock(return_value=HOT),  # keep the outage to the weather entity alone
+            ),
+            patch(
+                "custom_components.cover_automation.controller.async_call_later",
+                wraps=async_call_later,
+            ) as arm,
+        ):
+            for _ in range(3):
+                freezer.tick(timedelta(minutes=31))
+                async_fire_time_changed(hass)
+                await hass.async_block_till_done()
+                # The expiry is in the past for the whole outage: nothing left to wait for.
+                assert controller._cover_timers == {}
+        assert arm.call_count == 0  # not one re-arm per evaluation, let alone per second
+    finally:
+        await controller.async_stop()
+
+
+async def test_retry_deadline_is_dropped_once_the_disagreement_resolves(hass, hub_entry, freezer):
+    """F1: a failed command whose target is reached by hand must not keep a timer alive."""
+
+    async def failing(call: ServiceCall) -> None:
+        raise HomeAssistantError("device offline")
+
+    hass.services.async_register("cover", "close_cover", failing)
+    controller, sub_id = await start_controller(hass, hub_entry)
+    try:
+        assert sub_id in controller._retry_at
+        set_cover(hass, "cover.bedroom", state="closed", position=0)
+        await hass.async_block_till_done()
+        assert controller._retry_at == {}
+        assert controller._cover_timers == {}
+    finally:
+        await controller.async_stop()
