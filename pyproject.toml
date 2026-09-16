@@ -8,6 +8,7 @@ description = "Home Assistant custom integration: cover automation engine"
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q"
+asyncio_mode = "auto"
 
 [tool.ruff]
 target-version = "py314"
@@ -22,7 +23,10 @@ ignore = ["ANN401"]
 "tests/**" = ["ANN", "E501"]
 
 [tool.pyright]
-include = ["custom_components/cover_automation/engine"]
+venvPath = "."
+venv = ".venv"
+include = ["custom_components/cover_automation"]
 strict = ["custom_components/cover_automation/engine"]
+typeCheckingMode = "standard"
 pythonVersion = "3.14"
 reportMissingImports = true
