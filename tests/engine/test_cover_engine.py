@@ -123,6 +123,26 @@ def test_restoring_exemption_survives_a_frost_hold():
     assert r3.action == Send(Target.CLOSED, Layer.SCHEDULE)
 
 
+def test_wind_episode_survives_a_restart():
+    """I5: `p.wind_active` was write-only, so a release during downtime was invisible."""
+    e = CoverEngine(
+        CFG, CoverPersisted(owner=Owner.ENGINE, engine_target=Target.OPEN, wind_active=True)
+    )
+    assert e.rt.prev_wind_active
+    e.evaluate(inp(actual=CoverState.CLOSED, sun_hits=False, wind_active=False), sig())
+    assert e.rt.restoring_until == T0 + timedelta(seconds=900)
+
+
+def test_wind_disabled_cover_gets_no_restoring_window():
+    """I5: hub-wide wind must not grant a wind-disabled cover quiet-hour exemptions."""
+    no_wind = CoverConfig("c", "c", 180.0)
+    e = CoverEngine(
+        no_wind, CoverPersisted(owner=Owner.ENGINE, engine_target=Target.OPEN, wind_active=True)
+    )
+    e.evaluate(inp(actual=CoverState.CLOSED, sun_hits=False, wind_active=False), sig())
+    assert e.rt.restoring_until is None
+
+
 def test_status_precedence_partial_over_override_and_disabled_first():
     e = CoverEngine(CFG, CoverPersisted(owner=Owner.USER, dam=Target.CLOSED, enabled=False))
     r = e.evaluate(inp(actual=CoverState.PARTIAL), sig())

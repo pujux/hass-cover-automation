@@ -50,7 +50,12 @@ class CoverEngine:
     ) -> None:
         self.config = config
         self.p = persisted
-        self.rt = runtime or CoverRuntime()
+        if runtime is not None:
+            self.rt = runtime
+        else:
+            # §5 persists wind_active so a wind episode survives a restart: without the seed
+            # a release during downtime is never detected and no restoring window opens.
+            self.rt = CoverRuntime(prev_wind_active=persisted.wind_active)
         self.rt.override_dwell = ContinuousCondition(override_dwell_s)
 
     # -- evaluation -----------------------------------------------------------------
@@ -70,7 +75,7 @@ class CoverEngine:
             rt.last_settled = inputs.actual  # baseline for C2, also right after a restart
         if rule_fired:
             override.on_rule_fired(p)
-        if rt.prev_wind_active and not inputs.wind_active:
+        if cfg.wind_enabled and rt.prev_wind_active and not inputs.wind_active:
             rt.restoring_until = now + timedelta(seconds=RESTORING_WINDOW_S)
         rt.prev_wind_active = inputs.wind_active
         p.wind_active = inputs.wind_active
