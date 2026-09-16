@@ -4,6 +4,7 @@ from custom_components.cover_automation.engine.model import (
     CoverConfig,
     CoverPersisted,
     CoverState,
+    DamLayer,
     Layer,
     Mode,
     Owner,
@@ -116,6 +117,43 @@ def test_b_active_mode_reopens_user_closed_cover_after_dwell():
     sim.day(hits=False)
     sim.until("2026-07-01", "20:00")
     assert sim.actual is CoverState.OPEN  # active reopens what passive leaves closed
+
+
+def _c1_sim(reopening: ReopeningMode) -> Sim:
+    """C1: daylight, sun off the window, cover open; the user closes it at 14:00.
+
+    The override is created against a shading decision, but against `no_shade` -- there is
+    no sun on the window to lose, so §1.5(e) must not end it on the next evaluation.
+    """
+    sim = Sim(CFG, at("2026-07-01", "13:00"), reopening=reopening)
+    sim.day(hits=False)
+    sim.until("2026-07-01", "14:00")
+    sim.manual(CoverState.CLOSED)
+    assert sim.engine.p.dam is Target.OPEN and sim.engine.p.dam_layer is DamLayer.OTHER
+    sim.advance(1)  # one evaluation with sun_hits still false: the override must survive
+    assert sim.engine.p.dam is Target.OPEN and sim.actual is CoverState.CLOSED
+    sim.until("2026-07-01", "15:00")
+    sim.day(hits=True)  # the sun arrives: desired (closed) now disagrees with dam (open)
+    sim.until("2026-07-01", "15:31")
+    assert sim.engine.p.dam is None  # ... for 30 minutes: §1.5(d), not (e)
+    assert sim.actual is CoverState.CLOSED
+    sim.until("2026-07-01", "18:00")
+    sim.day(hits=False)  # the sun leaves
+    return sim
+
+
+def test_c1_manual_close_without_sun_survives_until_the_dwell():
+    sim = _c1_sim(ReopeningMode.PASSIVE)
+    sim.until("2026-07-01", "20:00")
+    assert sim.actual is CoverState.CLOSED  # passive never reopens a user-closed cover
+    assert sim.commands == []
+
+
+def test_c1_active_reopens_only_after_the_override_ended_and_the_sun_left():
+    sim = _c1_sim(ReopeningMode.ACTIVE)
+    sim.until("2026-07-01", "18:05")
+    assert sim.actual is CoverState.OPEN
+    assert sim.commands == [(at("2026-07-01", "18:01"), Target.OPEN, Layer.SHADING)]
 
 
 def test_c_wind_under_hold_with_quiet_hours_recloses_at_release():

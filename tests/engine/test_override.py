@@ -24,7 +24,8 @@ from custom_components.cover_automation.engine.override import (
 from tests.engine.conftest import at
 
 T0 = at("2026-07-01", "14:00")
-SHADE = Decision(Desired.CLOSED, Layer.SHADING, "shade")
+SHADE = Decision(Desired.CLOSED, Layer.SHADING, "shade", sun_hits=True)
+SHADE_NO_SUN = Decision(Desired.CLOSED, Layer.SHADING, "shade", sun_hits=False)  # forced_all
 NO_SHADE = Decision(Desired.OPEN, Layer.SHADING, "no_shade")
 NIGHT = Decision(Desired.LEAVE_ALONE, Layer.NONE, "night")
 HOLD = Decision(Desired.CLOSED, Layer.SCHEDULE, "schedule_close")
@@ -48,6 +49,20 @@ def test_manual_move_to_partial_during_leave_alone_has_no_dam():
     p = CoverPersisted(owner=Owner.ENGINE)
     on_manual_move(p, NIGHT, CoverState.PARTIAL, T0)
     assert p.dam is None and p.dam_layer is None and p.owner is Owner.USER
+
+
+def test_manual_move_against_a_shading_open_is_other_layer():
+    """C1: `no_shade` is a shading-layer decision, but §1.5(e) must not apply to it."""
+    p = CoverPersisted(owner=Owner.ENGINE, engine_target=Target.OPEN)
+    on_manual_move(p, NO_SHADE, CoverState.CLOSED, T0)
+    assert p.dam is Target.OPEN and p.dam_layer is DamLayer.OTHER
+
+
+def test_manual_move_against_a_shading_close_without_sun_is_other_layer():
+    """C1: forced_all closes covers the sun is not hitting; (e) has no sun to lose."""
+    p = CoverPersisted(owner=Owner.ENGINE, engine_target=Target.CLOSED)
+    on_manual_move(p, SHADE_NO_SUN, CoverState.OPEN, T0)
+    assert p.dam is Target.CLOSED and p.dam_layer is DamLayer.OTHER
 
 
 def test_manual_move_against_schedule_hold_is_other_layer():

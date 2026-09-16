@@ -285,6 +285,7 @@ class Decision:
     wind_opinion: Desired = Desired.LEAVE_ALONE
     door_opinion: Desired = Desired.LEAVE_ALONE
     want_shade: bool | None = None
+    sun_hits: bool = False  # sun_hits at this evaluation (scopes §1.5(e), decision 25)
 
 
 @dataclass(slots=True)

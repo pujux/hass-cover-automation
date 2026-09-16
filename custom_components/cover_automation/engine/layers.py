@@ -57,7 +57,7 @@ def evaluate(
     wind_wants = cfg.wind_enabled and inputs.wind_active
 
     def dec(desired: Desired, layer: Layer, reason: str, want: bool | None = None) -> Decision:
-        return Decision(desired, layer, reason, wind_op, door_op, want)
+        return Decision(desired, layer, reason, wind_op, door_op, want, inputs.sun_hits)
 
     # 1. Frost
     if s.frost is True:

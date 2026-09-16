@@ -22,6 +22,20 @@ def clear(p: CoverPersisted) -> None:
     p.dam_layer = None
 
 
+def _is_sun_driven_close(last_eval: Decision) -> bool:
+    """§1.5(e) only ends overrides created against a *sun-driven* shading close (decision 25).
+
+    A shading-layer decision that wants the cover open (`no_shade`), or one that closes it
+    while the sun is off the window (`forced_all`), is tagged `other`: there is no sun to
+    leave, so (e) must not fire for it.
+    """
+    return (
+        last_eval.layer is Layer.SHADING
+        and last_eval.desired is Desired.CLOSED
+        and last_eval.sun_hits
+    )
+
+
 def on_manual_move(
     p: CoverPersisted, last_eval: Decision | None, new_actual: CoverState, now: datetime
 ) -> None:
@@ -32,7 +46,7 @@ def on_manual_move(
         return
     if last_eval is not None and last_eval.desired is not Desired.LEAVE_ALONE:
         p.dam = last_eval.desired.as_target()
-        p.dam_layer = DamLayer.SHADING if last_eval.layer is Layer.SHADING else DamLayer.OTHER
+        p.dam_layer = DamLayer.SHADING if _is_sun_driven_close(last_eval) else DamLayer.OTHER
         return
     inverse = Target.from_state(new_actual)
     if inverse is not None:
