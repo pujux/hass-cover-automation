@@ -1,0 +1,109 @@
+{
+  "config": {
+    "abort": {
+      "reconfigure_successful": "Hub settings updated.",
+      "single_instance_allowed": "Only one Cover Automation hub is allowed."
+    },
+    "error": {
+      "entity_not_found": "That entity does not exist.",
+      "weather_no_daily": "This weather entity does not provide a daily forecast."
+    },
+    "step": {
+      "reconfigure": {
+        "data": {
+          "outdoor_temperature_sensor": "Outdoor temperature sensor",
+          "weather_entity": "Weather entity",
+          "wind_sensor": "Wind sensor"
+        },
+        "data_description": {
+          "outdoor_temperature_sensor": "Used for frost protection. Leave empty to use the weather entity's temperature.",
+          "weather_entity": "Provides the current condition and the daily forecast.",
+          "wind_sensor": "Wind speed or gust sensor. Leave empty to disable wind protection."
+        },
+        "title": "Hub entities"
+      },
+      "thresholds": {
+        "data": {
+          "frost_threshold": "Frost threshold",
+          "hot_high": "Hot day: minimum forecast high",
+          "hot_low": "Hot day: minimum forecast low",
+          "hot_low_enabled": "Require the forecast low as well",
+          "hot_override_entity": "Hot-day override entity",
+          "open_closed_tolerance": "Open/closed position tolerance",
+          "override_dwell": "Manual override dwell",
+          "sun_release_margin": "Sun release margin",
+          "sunny_conditions": "Weather conditions that count as sunny",
+          "sunny_off_delay": "Sunny: off delay",
+          "sunny_on_delay": "Sunny: on delay",
+          "sunny_override_entity": "Sunny override entity",
+          "weather_grace": "Weather unavailable grace period"
+        },
+        "data_description": {
+          "frost_threshold": "Below this outdoor temperature no cover moves.",
+          "open_closed_tolerance": "A cover within this many percent of an end position counts as open or closed.",
+          "override_dwell": "How long the engine must want something else before a manual override ends.",
+          "sun_release_margin": "Degrees past the window edges before the sun counts as gone.",
+          "sunny_off_delay": "How long the weather must be non-sunny before shading may reopen.",
+          "sunny_on_delay": "How long the weather must be sunny before shading may close."
+        },
+        "title": "Thresholds"
+      },
+      "user": {
+        "data": {
+          "outdoor_temperature_sensor": "Outdoor temperature sensor",
+          "weather_entity": "Weather entity",
+          "wind_sensor": "Wind sensor"
+        },
+        "data_description": {
+          "outdoor_temperature_sensor": "Used for frost protection. Leave empty to use the weather entity's temperature.",
+          "weather_entity": "Provides the current condition and the daily forecast.",
+          "wind_sensor": "Wind speed or gust sensor. Leave empty to disable wind protection."
+        },
+        "title": "Hub entities"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "frost_threshold": "Frost threshold",
+          "hot_high": "Hot day: minimum forecast high",
+          "hot_low": "Hot day: minimum forecast low",
+          "hot_low_enabled": "Require the forecast low as well",
+          "hot_override_entity": "Hot-day override entity",
+          "open_closed_tolerance": "Open/closed position tolerance",
+          "override_dwell": "Manual override dwell",
+          "sun_release_margin": "Sun release margin",
+          "sunny_conditions": "Weather conditions that count as sunny",
+          "sunny_off_delay": "Sunny: off delay",
+          "sunny_on_delay": "Sunny: on delay",
+          "sunny_override_entity": "Sunny override entity",
+          "weather_grace": "Weather unavailable grace period"
+        },
+        "title": "Thresholds"
+      }
+    }
+  },
+  "selector": {
+    "weather_condition": {
+      "options": {
+        "clear-night": "Clear night",
+        "cloudy": "Cloudy",
+        "exceptional": "Exceptional",
+        "fog": "Fog",
+        "hail": "Hail",
+        "lightning": "Lightning",
+        "lightning-rainy": "Lightning, rainy",
+        "partlycloudy": "Partly cloudy",
+        "pouring": "Pouring",
+        "rainy": "Rainy",
+        "snowy": "Snowy",
+        "snowy-rainy": "Snowy, rainy",
+        "sunny": "Sunny",
+        "windy": "Windy",
+        "windy-variant": "Windy, variant"
+      }
+    }
+  }
+}

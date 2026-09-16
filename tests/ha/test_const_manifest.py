@@ -15,7 +15,8 @@ async def test_integration_is_discoverable(hass: HomeAssistant) -> None:
     assert integration.domain == "cover_automation"
     assert integration.config_flow is True
     assert integration.single_config_entry is True
-    assert set(integration.dependencies) == {"sun", "weather", "logbook"}
+    assert set(integration.dependencies) == {"weather"}
+    assert set(integration.after_dependencies) == {"logbook", "sun"}
     assert integration.iot_class == "calculated"
     assert integration.integration_type == "hub"
 
