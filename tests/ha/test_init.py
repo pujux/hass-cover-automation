@@ -335,6 +335,34 @@ async def test_setup_prunes_store_records_of_removed_covers(
     assert "ghost" not in hub_entry.runtime_data.store.data.covers
 
 
+async def test_setup_keeps_persisted_state_of_a_broken_cover_but_prunes_a_removed_one(
+    hass: HomeAssistant, hub_entry, hass_storage: dict
+) -> None:
+    """A cover subentry that currently fails to parse still exists (it's skipped with a
+    broken_cover_config repair, not removed), so its persisted state must survive setup;
+    only a subentry id that is genuinely gone gets pruned."""
+    hass.config_entries.async_add_subentry(
+        hub_entry, ConfigSubentry(**cover_subentry_data("cover.broken", shading_rule="bogus"))
+    )
+    broken_sub = next(iter(hub_entry.subentries.values()))
+    set_cover(hass, "cover.broken")
+    hass_storage[const.storage_key(hub_entry.entry_id)] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": const.storage_key(hub_entry.entry_id),
+        "data": {
+            "covers": {
+                broken_sub.subentry_id: CoverPersisted().to_dict(),
+                "gone": CoverPersisted().to_dict(),
+            }
+        },
+    }
+    await setup_hub(hass, hub_entry)
+    assert broken_sub.subentry_id not in hub_entry.runtime_data.covers  # skipped, not loaded
+    assert broken_sub.subentry_id in hub_entry.runtime_data.store.data.covers  # kept
+    assert "gone" not in hub_entry.runtime_data.store.data.covers  # pruned
+
+
 async def test_setup_not_ready_when_weather_unavailable_or_without_daily(
     hass: HomeAssistant, hub_entry
 ) -> None:

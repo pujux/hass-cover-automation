@@ -284,7 +284,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: CoverAutomationConfigEnt
     await store.async_load()
     for subentry_id in covers:
         store.data.covers.setdefault(subentry_id, CoverPersisted())
-    store.prune(covers)
+    # "Removed" means the subentry is gone, not that it currently fails to parse: a cover
+    # that is temporarily broken (see the broken_cover_config repair above) must keep its
+    # persisted state, so prune against every cover subentry id, not just the ones in `covers`.
+    store.prune({s.subentry_id for s in entry.get_subentries_of_type(const.SUBENTRY_COVER)})
 
     entry.runtime_data = CoverAutomationData(
         hub=hub,
@@ -320,7 +323,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    # downgrade from a newer major version is not supported
+    # newer major versions cannot be downgraded
     if entry.version > 1:
         return False
     if entry.minor_version < 1:
