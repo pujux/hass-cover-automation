@@ -47,6 +47,18 @@ def test_from_dict_is_tolerant_of_garbage(caplog):
     assert "bad" in caplog.text
 
 
+def test_from_dict_tolerates_non_dict_covers(caplog):
+    data = StoreData.from_dict({"covers": ["not", "a", "dict"]})
+    assert data.covers == {}
+    assert caplog.text
+
+
+def test_from_dict_tolerates_non_mapping_raw(caplog):
+    data = StoreData.from_dict("garbage")
+    assert data == StoreData()
+    assert caplog.text
+
+
 async def test_store_load_save_remove(hass: HomeAssistant, hass_storage: dict) -> None:
     store = CoverAutomationStore(hass, "entry1")
     data = await store.async_load()

@@ -46,12 +46,27 @@ class StoreData:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> StoreData:
-        raw = raw or {}
+        if raw is None:
+            raw = {}
+        elif not isinstance(raw, dict):
+            _LOGGER.warning(
+                "Discarding persisted store data: expected a mapping, got %s",
+                type(raw).__name__,
+            )
+            raw = {}
+        covers_raw = raw.get("covers")
+        if not isinstance(covers_raw, dict):
+            if covers_raw is not None:
+                _LOGGER.warning(
+                    "Discarding persisted covers: expected a mapping, got %s",
+                    type(covers_raw).__name__,
+                )
+            covers_raw = {}
         covers: dict[str, CoverPersisted] = {}
-        for cover_id, record in (raw.get("covers") or {}).items():
+        for cover_id, record in covers_raw.items():
             try:
                 covers[str(cover_id)] = CoverPersisted.from_dict(dict(record))
-            except (ValueError, TypeError, KeyError, AttributeError) as err:
+            except (ValueError, TypeError) as err:
                 _LOGGER.warning("Discarding persisted state for cover %s: %s", cover_id, err)
                 covers[str(cover_id)] = CoverPersisted()
         try:
