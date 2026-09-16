@@ -46,7 +46,7 @@ class ForecastMaxSensor(HubEntity, SensorEntity):
         super().__init__(entry, controller, "forecast_max_today")
 
     @property
-    def native_value(self) -> float | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+    def native_value(self) -> float | None:
         return self.hub_view.forecast_max_c
 
 
@@ -60,7 +60,7 @@ class ForecastMinSensor(HubEntity, SensorEntity):
         super().__init__(entry, controller, "forecast_min_today")
 
     @property
-    def native_value(self) -> float | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+    def native_value(self) -> float | None:
         return self.hub_view.forecast_min_c
 
 
@@ -72,13 +72,11 @@ class NextScheduledEventSensor(HubEntity, SensorEntity):
         super().__init__(entry, controller, "next_scheduled_event")
 
     @property
-    def native_value(self) -> datetime | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+    def native_value(self) -> datetime | None:
         return self.hub_view.next_event_at
 
     @property
-    def extra_state_attributes(  # pyright: ignore[reportIncompatibleVariableOverride]
-        self,
-    ) -> dict[str, Any]:
+    def extra_state_attributes(self) -> dict[str, Any]:
         view = self.hub_view
         return {
             "profile": view.next_event_profile,
@@ -89,9 +87,7 @@ class NextScheduledEventSensor(HubEntity, SensorEntity):
 
 class CoverStatusSensor(CoverEntityBase, SensorEntity):
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options: ClassVar[list[str]] = [  # pyright: ignore[reportIncompatibleVariableOverride]
-        s.value for s in Status
-    ]
+    _attr_options: ClassVar[list[str]] = [s.value for s in Status]
     _unrecorded_attributes = frozenset(
         {
             "winning_layer",
@@ -115,13 +111,11 @@ class CoverStatusSensor(CoverEntityBase, SensorEntity):
         super().__init__(entry, controller, subentry_id, "status")
 
     @property
-    def native_value(self) -> str:  # pyright: ignore[reportIncompatibleVariableOverride]
+    def native_value(self) -> str:
         return self.view.status.value
 
     @property
-    def extra_state_attributes(  # pyright: ignore[reportIncompatibleVariableOverride]
-        self,
-    ) -> dict[str, Any]:
+    def extra_state_attributes(self) -> dict[str, Any]:
         v = self.view
         return {
             "desired_state": v.desired_state,

@@ -1,13 +1,21 @@
 {
-  "after_dependencies": ["logbook", "sun"],
-  "codeowners": ["@julianpufler"],
+  "after_dependencies": [
+    "logbook",
+    "sun"
+  ],
+  "codeowners": [
+    "@pujux"
+  ],
   "config_flow": true,
-  "dependencies": ["persistent_notification", "weather"],
-  "documentation": "https://github.com/julianpufler/hass-cover-automation",
+  "dependencies": [
+    "persistent_notification",
+    "weather"
+  ],
+  "documentation": "https://github.com/pujux/hass-cover-automation",
   "domain": "cover_automation",
   "integration_type": "hub",
   "iot_class": "calculated",
-  "issue_tracker": "https://github.com/julianpufler/hass-cover-automation/issues",
+  "issue_tracker": "https://github.com/pujux/hass-cover-automation/issues",
   "name": "Cover Automation",
   "single_config_entry": true,
   "version": "0.1.0"

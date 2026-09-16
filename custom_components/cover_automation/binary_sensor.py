@@ -49,7 +49,7 @@ class HotDaySensor(HubEntity, BinarySensorEntity):
         super().__init__(entry, controller, "hot_day")
 
     @property
-    def is_on(self) -> bool | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+    def is_on(self) -> bool | None:
         return self.hub_view.hot_day
 
 
@@ -60,7 +60,7 @@ class SunnySensor(HubEntity, BinarySensorEntity):
         super().__init__(entry, controller, "sunny")
 
     @property
-    def is_on(self) -> bool | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+    def is_on(self) -> bool | None:
         return self.hub_view.sunny
 
 
@@ -72,7 +72,7 @@ class FrostActiveSensor(HubEntity, BinarySensorEntity):
         super().__init__(entry, controller, "frost_active")
 
     @property
-    def is_on(self) -> bool | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+    def is_on(self) -> bool | None:
         return self.hub_view.frost
 
 
@@ -83,7 +83,7 @@ class AnyWindProtectionSensor(HubEntity, BinarySensorEntity):
         super().__init__(entry, controller, "any_wind_protection_active")
 
     @property
-    def is_on(self) -> bool | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+    def is_on(self) -> bool | None:
         return self.hub_view.any_wind_active
 
 
@@ -95,7 +95,7 @@ class ProblemSensor(HubEntity, BinarySensorEntity):
         super().__init__(entry, controller, "problem")
 
     @property
-    def is_on(self) -> bool | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+    def is_on(self) -> bool | None:
         return self.hub_view.problem
 
 
@@ -106,13 +106,11 @@ class ManualOverrideSensor(CoverEntityBase, BinarySensorEntity):
         super().__init__(entry, controller, subentry_id, "manual_override")
 
     @property
-    def is_on(self) -> bool | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+    def is_on(self) -> bool | None:
         return self.view.override_active
 
     @property
-    def extra_state_attributes(  # pyright: ignore[reportIncompatibleVariableOverride]
-        self,
-    ) -> dict[str, Any]:
+    def extra_state_attributes(self) -> dict[str, Any]:
         v = self.view
         return {"since": _iso(v.override_since), "overridden_desired": v.overridden_desired}
 
@@ -126,7 +124,7 @@ class SunHitsSensor(CoverEntityBase, BinarySensorEntity):
         super().__init__(entry, controller, subentry_id, "sun_hits")
 
     @property
-    def is_on(self) -> bool | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+    def is_on(self) -> bool | None:
         return self.view.sun_hits
 
 
@@ -139,5 +137,5 @@ class WindProtectionActiveSensor(CoverEntityBase, BinarySensorEntity):
         super().__init__(entry, controller, subentry_id, "wind_protection_active")
 
     @property
-    def is_on(self) -> bool | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+    def is_on(self) -> bool | None:
         return self.view.wind_active

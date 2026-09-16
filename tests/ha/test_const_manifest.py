@@ -26,6 +26,24 @@ def test_manifest_keys() -> None:
     assert list(data) == sorted(data), "hassfest requires alphabetically sorted keys"
     assert data["domain"] == const.DOMAIN
     assert data["version"] == "0.1.0"
+    repo = "https://github.com/pujux/hass-cover-automation"
+    assert data["codeowners"] == ["@pujux"]
+    assert data["documentation"] == repo
+    assert data["issue_tracker"] == f"{repo}/issues"
+
+
+def test_platforms_cover_every_entity_module() -> None:
+    from homeassistant.const import Platform
+
+    expected = {
+        Platform.BINARY_SENSOR,
+        Platform.BUTTON,
+        Platform.SELECT,
+        Platform.SENSOR,
+        Platform.SWITCH,
+    }
+    assert set(const.PLATFORMS) == expected
+    assert len(const.PLATFORMS) == len(expected)
 
 
 def test_defaults_match_spec() -> None:
