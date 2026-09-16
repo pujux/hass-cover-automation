@@ -121,6 +121,17 @@ def test_confirm_window_expiry_is_a_user_stop_only_at_partial():
     assert rt2.unconfirmed and p2.owner is Owner.ENGINE and p2.dam is None
 
 
+def test_user_stop_while_disabled_records_the_move_without_a_dam():
+    """§1.1: manual moves are recorded while the cover is disabled, but with `dam = null`."""
+    p = CoverPersisted(enabled=False)
+    rt = CoverRuntime(last_evaluation=SHADE)
+    commands.on_command_sent(p, rt, Target.CLOSED, Layer.SHADING, T0)
+    assert check_pending(p, rt, CFG, CoverState.PARTIAL, s(120)) == "manual"
+    assert p.owner is Owner.USER and p.manual_move_at == s(120)
+    assert p.dam is None and p.dam_layer is None
+    assert rt.pending is None and rt.contrary_since is None
+
+
 def test_late_match_without_pending_is_not_manual():
     p = CoverPersisted(owner=Owner.ENGINE, engine_target=Target.CLOSED)
     rt = CoverRuntime(unconfirmed=True)

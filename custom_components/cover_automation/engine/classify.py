@@ -117,11 +117,15 @@ def check_pending(
             # there for the whole confirm window -- the user pressed stop. `partial` is
             # never contrary (§1.0), so this is the only place that can see it. The override
             # dams the target the engine was moving toward; backoff and `unconfirmed` stay
-            # untouched because nothing failed.
+            # untouched because nothing failed. A disabled cover records the move but no dam
+            # (§1.1), exactly as `override.on_manual_move` does.
             p.owner = Owner.USER
             p.manual_move_at = now
-            p.dam = rt.pending.target
-            p.dam_layer = DamLayer.OTHER
+            if p.enabled:
+                p.dam = rt.pending.target
+                p.dam_layer = DamLayer.OTHER
+            else:
+                override.clear(p)
             rt.pending = None
             rt.contrary_since = None
             return "manual"
