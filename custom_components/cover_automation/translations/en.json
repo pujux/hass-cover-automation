@@ -63,6 +63,217 @@
       }
     }
   },
+  "config_subentries": {
+    "cover": {
+      "abort": {
+        "reconfigure_successful": "Cover updated."
+      },
+      "entry_type": "Cover",
+      "error": {
+        "already_configured": "This cover is already configured.",
+        "confirm_window_too_short": "The confirm window must be at least 10 seconds.",
+        "cover_unsupported": "This cover supports neither open/close nor position commands.",
+        "floor_not_below_ceiling": "The comfort floor must be below the comfort ceiling.",
+        "room_sensor_required": "The room-only rule needs a room temperature sensor.",
+        "wind_lower_not_below_upper": "The wind release threshold must be below the activation threshold."
+      },
+      "initiate_flow": {
+        "user": "Add cover"
+      },
+      "step": {
+        "reconfigure": {
+          "data": {
+            "azimuth": "Window azimuth",
+            "comfort_ceiling": "Comfort ceiling",
+            "comfort_floor": "Comfort floor",
+            "confirm_window": "Confirm window",
+            "cover_entity": "Cover",
+            "door_sensor": "Door sensor",
+            "elevation_max": "Sun elevation: maximum",
+            "elevation_min": "Sun elevation: minimum",
+            "min_move_interval": "Minimum interval between shading moves",
+            "name": "Name",
+            "room_temperature_sensor": "Room temperature sensor",
+            "schedule_profile": "Schedule profile",
+            "shading_rule": "Shading rule",
+            "tolerance_left": "Sun tolerance: left",
+            "tolerance_right": "Sun tolerance: right",
+            "wind_action": "Wind protection action",
+            "wind_enabled": "Wind protection",
+            "wind_hold": "Wind hold time",
+            "wind_lower": "Wind release threshold",
+            "wind_upper": "Wind activation threshold"
+          },
+          "title": "Cover"
+        },
+        "user": {
+          "data": {
+            "azimuth": "Window azimuth",
+            "comfort_ceiling": "Comfort ceiling",
+            "comfort_floor": "Comfort floor",
+            "confirm_window": "Confirm window",
+            "cover_entity": "Cover",
+            "door_sensor": "Door sensor",
+            "elevation_max": "Sun elevation: maximum",
+            "elevation_min": "Sun elevation: minimum",
+            "min_move_interval": "Minimum interval between shading moves",
+            "name": "Name",
+            "room_temperature_sensor": "Room temperature sensor",
+            "schedule_profile": "Schedule profile",
+            "shading_rule": "Shading rule",
+            "tolerance_left": "Sun tolerance: left",
+            "tolerance_right": "Sun tolerance: right",
+            "wind_action": "Wind protection action",
+            "wind_enabled": "Wind protection",
+            "wind_hold": "Wind hold time",
+            "wind_lower": "Wind release threshold",
+            "wind_upper": "Wind activation threshold"
+          },
+          "data_description": {
+            "azimuth": "Compass direction the window faces, 0–359°.",
+            "confirm_window": "How long a commanded move may take before it counts as unconfirmed. Must exceed the cover's travel time.",
+            "door_sensor": "While this door is open the cover never closes.",
+            "shading_rule": "How forecast and room temperature combine to decide shading."
+          },
+          "title": "Cover"
+        }
+      }
+    },
+    "profile": {
+      "abort": {
+        "reconfigure_successful": "Schedule profile updated."
+      },
+      "entry_type": "Schedule profile",
+      "error": {
+        "invalid_rules": "The rules are not valid: {problems}"
+      },
+      "initiate_flow": {
+        "user": "Add schedule profile"
+      },
+      "step": {
+        "reconfigure": {
+          "data": {
+            "name": "Name",
+            "quiet_end": "Quiet hours end",
+            "quiet_start": "Quiet hours start"
+          },
+          "sections": {
+            "rule_1": {
+              "data": {
+                "action": "Action",
+                "earliest": "Not before",
+                "enabled": "Enabled",
+                "latest": "Not after",
+                "offset_minutes": "Offset (minutes)",
+                "time": "Time",
+                "time_mode": "Time mode"
+              },
+              "name": "Rule 1"
+            },
+            "rule_2": {
+              "data": {
+                "action": "Action",
+                "earliest": "Not before",
+                "enabled": "Enabled",
+                "latest": "Not after",
+                "offset_minutes": "Offset (minutes)",
+                "time": "Time",
+                "time_mode": "Time mode"
+              },
+              "name": "Rule 2"
+            },
+            "rule_3": {
+              "data": {
+                "action": "Action",
+                "earliest": "Not before",
+                "enabled": "Enabled",
+                "latest": "Not after",
+                "offset_minutes": "Offset (minutes)",
+                "time": "Time",
+                "time_mode": "Time mode"
+              },
+              "name": "Rule 3"
+            },
+            "rule_4": {
+              "data": {
+                "action": "Action",
+                "earliest": "Not before",
+                "enabled": "Enabled",
+                "latest": "Not after",
+                "offset_minutes": "Offset (minutes)",
+                "time": "Time",
+                "time_mode": "Time mode"
+              },
+              "name": "Rule 4"
+            }
+          },
+          "title": "Schedule profile"
+        },
+        "user": {
+          "data": {
+            "name": "Name",
+            "quiet_end": "Quiet hours end",
+            "quiet_start": "Quiet hours start"
+          },
+          "data_description": {
+            "quiet_start": "Between start and end no shading or schedule move happens; wind protection still acts."
+          },
+          "sections": {
+            "rule_1": {
+              "data": {
+                "action": "Action",
+                "earliest": "Not before",
+                "enabled": "Enabled",
+                "latest": "Not after",
+                "offset_minutes": "Offset (minutes)",
+                "time": "Time",
+                "time_mode": "Time mode"
+              },
+              "description": "A close rule holds until the next rule or a manual move; an open rule opens once.",
+              "name": "Rule 1"
+            },
+            "rule_2": {
+              "data": {
+                "action": "Action",
+                "earliest": "Not before",
+                "enabled": "Enabled",
+                "latest": "Not after",
+                "offset_minutes": "Offset (minutes)",
+                "time": "Time",
+                "time_mode": "Time mode"
+              },
+              "name": "Rule 2"
+            },
+            "rule_3": {
+              "data": {
+                "action": "Action",
+                "earliest": "Not before",
+                "enabled": "Enabled",
+                "latest": "Not after",
+                "offset_minutes": "Offset (minutes)",
+                "time": "Time",
+                "time_mode": "Time mode"
+              },
+              "name": "Rule 3"
+            },
+            "rule_4": {
+              "data": {
+                "action": "Action",
+                "earliest": "Not before",
+                "enabled": "Enabled",
+                "latest": "Not after",
+                "offset_minutes": "Offset (minutes)",
+                "time": "Time",
+                "time_mode": "Time mode"
+              },
+              "name": "Rule 4"
+            }
+          },
+          "title": "Schedule profile"
+        }
+      }
+    }
+  },
   "options": {
     "step": {
       "init": {
@@ -86,6 +297,26 @@
     }
   },
   "selector": {
+    "rule_action": {
+      "options": {
+        "closed": "Close",
+        "open": "Open"
+      }
+    },
+    "shading_rule": {
+      "options": {
+        "either": "Forecast or room temperature",
+        "forecast_with_room": "Forecast, refined by room temperature",
+        "room_only": "Room temperature only"
+      }
+    },
+    "time_mode": {
+      "options": {
+        "fixed": "Fixed time",
+        "sunrise": "Relative to sunrise",
+        "sunset": "Relative to sunset"
+      }
+    },
     "weather_condition": {
       "options": {
         "clear-night": "Clear night",
@@ -103,6 +334,12 @@
         "sunny": "Sunny",
         "windy": "Windy",
         "windy-variant": "Windy, variant"
+      }
+    },
+    "wind_action": {
+      "options": {
+        "hold": "Hold position",
+        "open": "Force open"
       }
     }
   }
