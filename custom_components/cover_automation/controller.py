@@ -125,6 +125,7 @@ class CoverAutomationController:
             self._profiles,
             {cid: cfg.profile_id for cid, (cfg, _b) in covers.items()},
             self._on_rule_fired,
+            create_task=self._create_task,
         )
         self._actual: dict[str, CoverState] = {}
         self._reconciled: set[str] = set()

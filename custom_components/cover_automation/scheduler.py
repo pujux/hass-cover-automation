@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, tzinfo
+from typing import Any
 
 from homeassistant.const import SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
@@ -57,11 +58,15 @@ class ScheduleTracker:
         on_fire: Callable[[frozenset[str], datetime], Awaitable[None]],
         *,
         sun: SunTimes | None = None,
+        create_task: Callable[[Coroutine[Any, Any, None], str], None] | None = None,
     ) -> None:
         self.hass = hass
         self.profiles = dict(profiles)
         self.cover_profile = dict(cover_profile)
         self._on_fire = on_fire
+        # Without a factory Home Assistant spawns a plain task for the coroutine, which would
+        # outlive a reload; the entry hands one in so the fire handler dies with the entry (F9).
+        self._create_task = create_task
         self.sun: SunTimes = sun or HassSunTimes(hass)
         self._unsub: CALLBACK_TYPE | None = None
         self._armed_at: datetime | None = None
@@ -154,7 +159,13 @@ class ScheduleTracker:
         self._armed_covers = frozenset(
             cover for event in events if event.at == at for cover in event.covers
         )
-        self._unsub = async_track_point_in_time(self.hass, self._fired, at)
+        target = self._fired if self._create_task is None else self._fire_task
+        self._unsub = async_track_point_in_time(self.hass, target, at)
+
+    @callback
+    def _fire_task(self, now: datetime) -> None:
+        if self._create_task is not None:
+            self._create_task(self._fired(now), "schedule rule")
 
     @callback
     def async_cancel(self) -> None:

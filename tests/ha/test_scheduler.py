@@ -95,6 +95,39 @@ async def test_arm_fires_and_rearms(hass: HomeAssistant, freezer) -> None:
     tracker.async_cancel()
 
 
+async def test_arm_runs_the_handler_on_the_injected_task_factory(
+    hass: HomeAssistant, freezer
+) -> None:
+    """F9: with a `create_task` the fire handler runs on a task the entry owns."""
+    fired: list[tuple[frozenset[str], datetime]] = []
+    tasks: list[str] = []
+
+    async def on_fire(covers, at):
+        fired.append((covers, at))
+
+    def create_task(coro, name):
+        tasks.append(name)
+        hass.async_create_task(coro)
+
+    freezer.move_to(local(2026, 7, 10, 21, 29))
+    tracker = ScheduleTracker(
+        hass,
+        {"p1": NIGHT},
+        {"c1": "p1"},
+        on_fire,
+        sun=FixedSun(),
+        create_task=create_task,
+    )
+    tracker.async_arm(dt_util.utcnow())
+    freezer.move_to(local(2026, 7, 10, 21, 30) + timedelta(seconds=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert tasks == ["schedule rule"]
+    assert len(fired) == 1 and fired[0][0] == frozenset({"c1"})
+    assert tracker.next_event(dt_util.utcnow()).at == local(2026, 7, 11, 7, 0)  # re-armed
+    tracker.async_cancel()
+
+
 async def test_fired_handler_exception_still_rearms(hass: HomeAssistant, freezer, caplog) -> None:
     calls: list[tuple[frozenset[str], datetime]] = []
 
