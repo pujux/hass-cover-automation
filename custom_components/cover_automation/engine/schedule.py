@@ -1,4 +1,11 @@
-"""Schedule profiles: rule fire times, quiet hours, holds and releases (spec §1.2 layer 5, §3)."""
+"""Schedule profiles: rule fire times, quiet hours, holds and releases (spec §1.2 layer 5, §3).
+
+Timezone contract: every rule and quiet-hours boundary is a wall-clock time in the home's
+local zone. The query functions (`quiet_window`, `quiet_active`, `last_fired`, `next_fire`,
+`fired_between`, `view`) take an optional `tz` and convert their datetime arguments to it
+first; without it they read the local day and clock off the argument's own `tzinfo`, so a
+caller passing `dt_util.utcnow()` and no `tz` silently evaluates the schedule in UTC.
+"""
 
 from __future__ import annotations
 
@@ -51,11 +58,16 @@ def _combine(day: date, clock: time, tz: tzinfo) -> datetime:
     return datetime.combine(day, clock).replace(tzinfo=tz)
 
 
-def quiet_window(quiet: QuietHours | None, at: datetime) -> tuple[datetime, datetime] | None:
+def quiet_window(
+    quiet: QuietHours | None, at: datetime, *, tz: tzinfo | None = None
+) -> tuple[datetime, datetime] | None:
     """The quiet-hours window [start, end) that contains `at`, or None."""
     if quiet is None:
         return None
-    tz = at.tzinfo
+    if tz is not None:
+        at = at.astimezone(tz)
+    else:
+        tz = at.tzinfo
     assert tz is not None
     day = at.date()
     if quiet.start < quiet.end:
@@ -70,8 +82,8 @@ def quiet_window(quiet: QuietHours | None, at: datetime) -> tuple[datetime, date
     return None
 
 
-def quiet_active(quiet: QuietHours | None, now: datetime) -> bool:
-    return quiet_window(quiet, now) is not None
+def quiet_active(quiet: QuietHours | None, now: datetime, *, tz: tzinfo | None = None) -> bool:
+    return quiet_window(quiet, now, tz=tz) is not None
 
 
 def fire_time(
@@ -122,19 +134,29 @@ def _candidates(
     return out
 
 
-def last_fired(profile: Profile, now: datetime, sun: SunTimes) -> tuple[datetime, int] | None:
+def last_fired(
+    profile: Profile, now: datetime, sun: SunTimes, *, tz: tzinfo | None = None
+) -> tuple[datetime, int] | None:
+    if tz is not None:
+        now = now.astimezone(tz)
     past = [c for c in _candidates(profile, now, sun, range(-2, 1)) if c[0] <= now]
     return past[-1] if past else None
 
 
-def next_fire(profile: Profile, now: datetime, sun: SunTimes) -> tuple[datetime, int] | None:
+def next_fire(
+    profile: Profile, now: datetime, sun: SunTimes, *, tz: tzinfo | None = None
+) -> tuple[datetime, int] | None:
+    if tz is not None:
+        now = now.astimezone(tz)
     future = [c for c in _candidates(profile, now, sun, range(0, 2)) if c[0] > now]
     return future[0] if future else None
 
 
 def fired_between(
-    profile: Profile, start: datetime, end: datetime, sun: SunTimes
+    profile: Profile, start: datetime, end: datetime, sun: SunTimes, *, tz: tzinfo | None = None
 ) -> list[tuple[datetime, int]]:
+    if tz is not None:
+        start, end = start.astimezone(tz), end.astimezone(tz)
     span_days = (end.date() - start.date()).days
     return [
         c for c in _candidates(profile, end, sun, range(-span_days - 1, 1)) if start < c[0] <= end
@@ -148,9 +170,13 @@ def view(
     actual: CoverState,
     manual_move_at: datetime | None,
     satisfied_fire_at: datetime | None = None,
+    *,
+    tz: tzinfo | None = None,
 ) -> ScheduleView:
     """Spec §1.2 layer 5. `satisfied_fire_at` is the fire time of the open rule the engine
     has already seen satisfied (CoverRuntime.open_rule_satisfied_at)."""
+    if tz is not None:
+        now = now.astimezone(tz)
     quiet = quiet_active(profile.quiet_hours, now)
     last = last_fired(profile, now, sun)
     if last is None:

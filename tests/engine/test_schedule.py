@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from custom_components.cover_automation.engine.model import CoverState, Desired, Target
 from custom_components.cover_automation.engine.schedule import (
@@ -145,6 +145,23 @@ def test_quiet_active_in_view_and_no_rules():
     p = Profile("p", "p", (), QuietHours(t("22:00"), t("07:00")))
     v = view(p, at("2026-07-01", "23:00"), SUN, CoverState.OPEN, None)
     assert v.quiet_active and v.desired is Desired.LEAVE_ALONE and v.rule_fired_at is None
+
+
+def test_utc_now_needs_an_explicit_tz():
+    """I2: the local day and clock come from `tz` when given, else from `now.tzinfo`."""
+    p = Profile("p", "p", (close_at("21:00"),), QuietHours(t("22:00"), t("07:00")))
+    local = at("2026-07-01", "23:00")
+    utc = local.astimezone(UTC)  # 21:00Z, the same instant
+    assert quiet_active(p.quiet_hours, utc, tz=TZ)
+    assert quiet_active(p.quiet_hours, local)
+    v = view(p, utc, SUN, CoverState.OPEN, None, tz=TZ)
+    assert v.quiet_active and v.rule_fired_at == at("2026-07-01", "21:00")
+    assert last_fired(p, utc, SUN, tz=TZ) == (at("2026-07-01", "21:00"), 0)
+    # documented failure mode, not a desirable behaviour: without `tz` the UTC clock is used,
+    # so quiet hours are two hours late and the rule "fires" at 21:00Z == 23:00 local
+    assert not quiet_active(p.quiet_hours, utc)
+    v_utc = view(p, utc, SUN, CoverState.OPEN, None)
+    assert not v_utc.quiet_active and v_utc.rule_fired_at == local
 
 
 def test_close_clamp_crossing_into_previous_day_is_skipped():
