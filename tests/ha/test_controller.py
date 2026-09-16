@@ -17,6 +17,8 @@ from custom_components.cover_automation.engine.model import (
     Target,
 )
 from custom_components.cover_automation.forecast import TodayForecast
+from homeassistant.components import persistent_notification
+from homeassistant.components.cover import CoverEntityFeature
 from homeassistant.config_entries import ConfigSubentry
 from homeassistant.const import EVENT_CORE_CONFIG_UPDATE
 from homeassistant.core import CoreState, HomeAssistant, ServiceCall
@@ -671,5 +673,191 @@ async def test_core_config_update_rearms_the_schedule_and_evaluates(
         await hass.async_block_till_done()
         assert controller._schedule._unsub is not unsub_before  # re-armed
         assert controller.cover_views[sub_id] is not view_before  # and re-evaluated
+    finally:
+        await controller.async_stop()
+
+
+async def test_position_only_cover_uses_set_cover_position(hass, hub_entry, cover_services):
+    """F5: a cover that only advertises SET_POSITION is driven by position."""
+    controller, _sub_id = await start_controller(
+        hass, hub_entry, cover_state=("open", 100, CoverEntityFeature.SET_POSITION)
+    )
+    try:
+        assert not cover_services["close"]
+        assert len(cover_services["position"]) == 1
+        call = cover_services["position"][0]
+        assert call.data["entity_id"] == "cover.bedroom" and call.data["position"] == 0
+    finally:
+        await controller.async_stop()
+
+
+async def test_cover_without_usable_features_raises_a_repair_until_it_reports_them(
+    hass, hub_entry, cover_services
+):
+    """F5: features=0 means no command at all, with a repair that clears when they show up."""
+    controller, sub_id = await start_controller(hass, hub_entry, cover_state=("open", 100, 0))
+    try:
+        reg = ir.async_get(hass)
+        issue_id = f"cover_unsupported_{sub_id}"
+        assert not cover_services["close"] and not cover_services["position"]
+        assert reg.async_get_issue(const.DOMAIN, issue_id) is not None
+        set_cover(hass, "cover.bedroom", state="open", position=100, features=3)
+        await hass.async_block_till_done()
+        assert reg.async_get_issue(const.DOMAIN, issue_id) is None
+        assert len(cover_services["close"]) == 1
+    finally:
+        await controller.async_stop()
+
+
+async def test_door_layer_opens_holds_and_reports_a_missing_sensor(
+    hass, hub_entry, cover_services, freezer
+):
+    """F7a: an open door wins over shading, and a missing door sensor raises a repair."""
+    hass.states.async_set("binary_sensor.terrace", "off")
+    controller, sub_id = await start_controller(
+        hass, hub_entry, cover_overrides={const.CONF_DOOR_SENSOR: "binary_sensor.terrace"}
+    )
+    try:
+        assert len(cover_services["close"]) == 1  # hot and sunny: shading closed it
+        set_cover(hass, "cover.bedroom", state="closed", position=0)
+        await hass.async_block_till_done()
+        hass.states.async_set("binary_sensor.terrace", "on")
+        await hass.async_block_till_done()
+        assert len(cover_services["open"]) == 1  # the door layer skips the minimum interval
+        assert controller.cover_views[sub_id].status is Status.DOOR_OPEN
+        set_cover(hass, "cover.bedroom", state="open", position=100)
+        await hass.async_block_till_done()
+        hass.states.async_set("binary_sensor.terrace", "off")
+        await hass.async_block_till_done()
+        assert len(cover_services["close"]) == 1  # shading is held by the minimum interval
+        freezer.tick(timedelta(minutes=11))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+        assert len(cover_services["close"]) == 2  # ... and closes again once it has passed
+        hass.states.async_remove("binary_sensor.terrace")
+        await hass.async_block_till_done()
+        issue = ir.async_get(hass).async_get_issue(
+            const.DOMAIN, f"door_sensor_unavailable_{sub_id}"
+        )
+        assert issue is not None
+    finally:
+        await controller.async_stop()
+
+
+async def test_frost_conflict_notifies_once_and_is_dismissed_when_it_clears(
+    hass, hub_entry, cover_services, freezer
+):
+    """F7b/F12: frost beats wind, notifies once, and cleans up when the frost goes away."""
+    controller, sub_id = await build_controller(
+        hass,
+        hub_entry,
+        cover_overrides={
+            const.CONF_WIND_ENABLED: True,
+            const.CONF_WIND_UPPER: 60,
+            const.CONF_WIND_LOWER: 50,
+            const.CONF_WIND_UNIT: "km/h",
+        },
+        cover_state=("closed", 0, 3),
+    )
+    set_weather(hass, condition="sunny", temperature=-5.0)  # the frost source (no outdoor sensor)
+    set_sensor(hass, "sensor.wind", 75.0, unit="km/h", device_class="wind_speed")
+    reg = ir.async_get(hass)
+    issue_id = f"frost_conflict_{sub_id}"
+    with (
+        patch(
+            "custom_components.cover_automation.controller.async_fetch_today",
+            AsyncMock(return_value=HOT),
+        ),
+        patch.object(persistent_notification, "async_create") as create,
+        patch.object(persistent_notification, "async_dismiss") as dismiss,
+    ):
+        await controller.async_start()
+        await hass.async_block_till_done()
+        try:
+            assert not cover_services["open"]  # frost holds the cover shut
+            assert controller.cover_views[sub_id].status is Status.HELD_FROST
+            assert reg.async_get_issue(const.DOMAIN, issue_id) is not None
+            assert create.call_count == 1
+            assert create.call_args.kwargs["notification_id"] == f"cover_automation_frost_{sub_id}"
+            await controller.async_evaluate_now()
+            assert create.call_count == 1  # notified once per conflict, not per evaluation
+            set_weather(hass, condition="sunny", temperature=10.0)
+            await hass.async_block_till_done()
+            assert reg.async_get_issue(const.DOMAIN, issue_id) is None
+            assert len(cover_services["open"]) == 1  # wind may protect the cover again
+            dismiss.assert_called_once_with(hass, f"cover_automation_frost_{sub_id}")
+        finally:
+            await controller.async_stop()
+
+
+async def test_quiet_hours_block_a_shading_close(hass, hub_entry, cover_services, freezer):
+    """F7c: inside quiet hours nothing moves, and the status says why."""
+    rules = [
+        {
+            const.CONF_RULE_ACTION: "open",
+            const.CONF_RULE_TIME_MODE: "fixed",
+            const.CONF_RULE_TIME: "07:00:00",
+        }
+    ]
+    freezer.move_to(dt_util.now().replace(hour=23, minute=0, second=0, microsecond=0))
+    controller, sub_id = await start_controller(
+        hass,
+        hub_entry,
+        profile=profile_subentry_data("Night", rules=rules, quiet=("22:00:00", "07:00:00")),
+    )
+    try:
+        view = controller.cover_views[sub_id]
+        assert not cover_services["close"] and not cover_services["open"]
+        assert view.status is Status.QUIET_HOURS and view.winning_layer == "quiet_hours"
+    finally:
+        await controller.async_stop()
+
+
+async def test_confirm_window_expiry_then_a_user_stop_part_way(
+    hass, hub_entry, cover_services, freezer
+):
+    """F7d: a cover that never moves goes `unconfirmed`; one that stops part-way is a user stop."""
+    controller, sub_id = await start_controller(hass, hub_entry)
+    try:
+        engine = controller.engine(sub_id)
+        assert len(cover_services["close"]) == 1 and engine.rt.pending is not None
+        freezer.tick(timedelta(seconds=121))  # confirm window, cover still reporting `open`
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+        assert controller.cover_views[sub_id].status is Status.UNCONFIRMED
+        assert engine.rt.pending is None and engine.rt.backoff_until is not None
+        freezer.tick(timedelta(minutes=11))  # backoff and minimum interval both elapse
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+        assert len(cover_services["close"]) == 2 and engine.rt.pending is not None
+        set_cover(hass, "cover.bedroom", state="open", position=50)  # the user hit stop
+        await hass.async_block_till_done()
+        freezer.tick(timedelta(seconds=121))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+        view = controller.cover_views[sub_id]
+        assert engine.p.owner is Owner.USER and engine.p.dam is Target.CLOSED
+        assert view.status is Status.PARTIAL and view.override_active
+    finally:
+        await controller.async_stop()
+
+
+async def test_midnight_rollover_clears_hot_day_and_refetches_the_forecast(
+    hass, hub_entry, cover_services, freezer
+):
+    """F7e: the local-midnight job rolls the latch over and fetches today's forecast again."""
+    freezer.move_to(dt_util.now().replace(hour=23, minute=0, second=0, microsecond=0))
+    controller, _sub_id = await start_controller(hass, hub_entry)
+    try:
+        assert controller.hub_view.hot_day is True
+        with patch(
+            "custom_components.cover_automation.controller.async_fetch_today",
+            AsyncMock(return_value=None),
+        ) as fetch:
+            freezer.tick(timedelta(hours=1, minutes=1))
+            async_fire_time_changed(hass)
+            await hass.async_block_till_done()
+            assert fetch.called
+        assert controller.hub_view.hot_day is None
     finally:
         await controller.async_stop()

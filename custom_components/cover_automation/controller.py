@@ -35,6 +35,7 @@ from homeassistant.util import dt as dt_util
 
 from . import const, repairs
 from .config_map import CoverBindings, HubConfig
+from .engine.classify import pending_deadline
 from .engine.cover import CoverEngine
 from .engine.model import (
     CoverConfig,
@@ -610,8 +611,11 @@ class CoverAutomationController:
             )
             if c is not None and c > now
         ]
-        if result.next_check_at is not None:
-            candidates.append(result.next_check_at)
+        # `result` was computed before `_act` ran, so a command sent in this very evaluation
+        # is only visible on the engine's runtime: without re-reading the confirm-window
+        # deadline here, an unresponsive cover would sit `pending` until the fallback tick.
+        deadline = pending_deadline(self._engines[cover_id].rt, self._covers[cover_id][0])
+        candidates.extend(c for c in (result.next_check_at, deadline) if c is not None)
         if not candidates:
             return
         delay = max(1.0, (min(candidates) - now).total_seconds())
