@@ -110,6 +110,18 @@ def test_thresholds_schema_converts_temperature_bounds_for_fahrenheit() -> None:
     assert hot_high_marker.default() == 75.0  # 24 °C -> 75.2 °F -> rounds to 75.0
 
 
+async def test_options_flow_clears_override_entities(hass: HomeAssistant, hub_entry) -> None:
+    hass.config_entries.async_update_entry(
+        hub_entry,
+        options={**hub_entry.options, const.CONF_SUNNY_OVERRIDE_ENTITY: "binary_sensor.x"},
+    )
+    result = await hass.config_entries.options.async_init(hub_entry.entry_id)
+    posted = {k: v for k, v in hub_options().items() if k != const.CONF_TEMPERATURE_UNIT}
+    result = await hass.config_entries.options.async_configure(result["flow_id"], posted)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert const.CONF_SUNNY_OVERRIDE_ENTITY not in hub_entry.options
+
+
 async def test_reconfigure_flow_changes_hub_entities(hass: HomeAssistant, hub_entry) -> None:
     set_weather(hass)
     set_weather(hass, "weather.other")

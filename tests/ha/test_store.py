@@ -93,3 +93,27 @@ async def test_schedule_save_is_delayed(hass: HomeAssistant, hass_storage: dict,
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
     assert hass_storage[key]["data"]["simulation"] is True
+
+
+async def test_prune_drops_records_of_removed_covers(
+    hass: HomeAssistant, hass_storage: dict
+) -> None:
+    store = CoverAutomationStore(hass, "e")
+    await store.async_load()
+    store.data.covers["keep"] = CoverPersisted()
+    store.data.covers["gone"] = CoverPersisted()
+    store.prune(keep={"keep"})
+    assert set(store.data.covers) == {"keep"}
+
+
+async def test_store_minor_version_migration_passthrough(
+    hass: HomeAssistant, hass_storage: dict
+) -> None:
+    hass_storage[const.storage_key("e")] = {
+        "version": 1,
+        "minor_version": 0,
+        "key": const.storage_key("e"),
+        "data": {"covers": {}, "simulation": True},
+    }
+    data = await CoverAutomationStore(hass, "e").async_load()
+    assert data.simulation is True

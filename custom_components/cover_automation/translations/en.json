@@ -73,11 +73,13 @@
         "already_configured": "This cover is already configured.",
         "confirm_window_too_short": "The confirm window must be at least 10 seconds.",
         "cover_unsupported": "This cover supports neither open/close nor position commands.",
+        "elevation_min_not_below_max": "The minimum sun elevation must be below the maximum.",
         "floor_not_below_ceiling": "The comfort floor must be below the comfort ceiling.",
         "room_sensor_required": "The room-only rule needs a room temperature sensor.",
         "wind_lower_not_below_upper": "The wind release threshold must be below the activation threshold."
       },
       "initiate_flow": {
+        "reconfigure": "Reconfigure cover",
         "user": "Add cover"
       },
       "step": {
@@ -103,6 +105,12 @@
             "wind_hold": "Wind hold time",
             "wind_lower": "Wind release threshold",
             "wind_upper": "Wind activation threshold"
+          },
+          "data_description": {
+            "azimuth": "Compass direction the window faces, 0–359°.",
+            "confirm_window": "How long a commanded move may take before it counts as unconfirmed. Must exceed the cover's travel time.",
+            "door_sensor": "While this door is open the cover never closes.",
+            "shading_rule": "How forecast and room temperature combine to decide shading."
           },
           "title": "Cover"
         },
@@ -149,6 +157,7 @@
         "name_required": "A name is required."
       },
       "initiate_flow": {
+        "reconfigure": "Reconfigure schedule profile",
         "user": "Add schedule profile"
       },
       "step": {
@@ -157,6 +166,9 @@
             "name": "Name",
             "quiet_end": "Quiet hours end",
             "quiet_start": "Quiet hours start"
+          },
+          "data_description": {
+            "quiet_start": "Between start and end no shading or schedule move happens; wind protection still acts."
           },
           "sections": {
             "rule_1": {
@@ -169,6 +181,7 @@
                 "time": "Time",
                 "time_mode": "Time mode"
               },
+              "description": "A close rule holds until the next rule or a manual move; an open rule opens once.",
               "name": "Rule 1"
             },
             "rule_2": {
@@ -310,6 +323,14 @@
           "sunny_on_delay": "Sunny: on delay",
           "sunny_override_entity": "Sunny override entity",
           "weather_grace": "Weather unavailable grace period"
+        },
+        "data_description": {
+          "frost_threshold": "Below this outdoor temperature no cover moves.",
+          "open_closed_tolerance": "A cover within this many percent of an end position counts as open or closed.",
+          "override_dwell": "How long the engine must want something else before a manual override ends.",
+          "sun_release_margin": "Degrees past the window edges before the sun counts as gone.",
+          "sunny_off_delay": "How long the weather must be non-sunny before shading may reopen.",
+          "sunny_on_delay": "How long the weather must be sunny before shading may close."
         },
         "title": "Thresholds"
       }

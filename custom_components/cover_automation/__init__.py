@@ -11,6 +11,7 @@ from functools import partial
 
 from homeassistant.components.weather.const import WeatherEntityFeature
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
@@ -62,7 +63,7 @@ def _broken_profile_config_issue_id(subentry_id: str) -> str:
 def _validate_required_entities(hass: HomeAssistant, hub: HubConfig) -> None:
     """Weather (with daily forecast) and sun.sun must exist, otherwise retry (spec §5)."""
     weather = hass.states.get(hub.weather_entity)
-    if weather is None or weather.state in ("unavailable", "unknown"):
+    if weather is None or weather.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
         raise ConfigEntryNotReady(f"weather entity {hub.weather_entity} is not available yet")
     features = int(weather.attributes.get("supported_features", 0) or 0)
     if not features & WeatherEntityFeature.FORECAST_DAILY:
@@ -283,6 +284,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: CoverAutomationConfigEnt
     await store.async_load()
     for subentry_id in covers:
         store.data.covers.setdefault(subentry_id, CoverPersisted())
+    # "Removed" means the subentry is gone, not that it currently fails to parse: a cover
+    # that is temporarily broken (see the broken_cover_config repair above) must keep its
+    # persisted state, so prune against every cover subentry id, not just the ones in `covers`.
+    store.prune({s.subentry_id for s in entry.get_subentries_of_type(const.SUBENTRY_COVER)})
 
     entry.runtime_data = CoverAutomationData(
         hub=hub,
@@ -318,8 +323,12 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    # downgrade from a newer major version is not supported
-    return entry.version <= 1
+    # newer major versions cannot be downgraded
+    if entry.version > 1:
+        return False
+    if entry.minor_version < 1:
+        hass.config_entries.async_update_entry(entry, version=1, minor_version=1)
+    return True
 
 
 async def async_remove_config_entry_device(
