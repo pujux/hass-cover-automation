@@ -365,16 +365,19 @@ def test_j2_forced_all_does_nothing_for_protection_only():
     assert sim.actual is CoverState.OPEN and sim.commands == []
 
 
-def test_k_user_stop_at_partial_is_respected_until_override_ends():
+def test_k_user_stop_at_partial_is_respected():
+    """Decision 27: the stop is a manual move damming the engine's target, not a failure."""
     sim = Sim(CFG, at("2026-07-01", "12:00"), travel_s=120)
     sim.day(hits=True)
     sim.advance(1)  # close sent, PARTIAL
     sim._arrival = None  # the user presses stop: the cover stays PARTIAL, never reaches CLOSED
-    sim.advance(3)
-    assert sim.engine.rt.unconfirmed
-    # the cover is PARTIAL and the engine wants closed; after backoff it retries
-    sim.advance(11)
-    assert sim.commands[-1][1] is Target.CLOSED and len(sim.commands) == 2
+    sim.advance(3)  # the confirm window expires at 12:03
+    assert sim.engine.p.owner is Owner.USER and sim.engine.p.dam is Target.CLOSED
+    assert not sim.engine.rt.unconfirmed  # nothing failed, so no backoff either
+    sim.advance(15)  # past the minimum interval and the backoff the old reading would use
+    assert len(sim.commands) == 1
+    assert sim.engine.p.dam is Target.CLOSED and sim.engine.p.owner is Owner.USER
+    assert sim.actual is CoverState.PARTIAL
 
 
 def test_l_room_hot_flap_is_damped_by_min_interval():

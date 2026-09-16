@@ -11,6 +11,7 @@ from .model import (
     CoverPersisted,
     CoverRuntime,
     CoverState,
+    DamLayer,
     Owner,
     Target,
     TransitionKind,
@@ -111,6 +112,19 @@ def check_pending(
         override.on_manual_move(p, rt.last_evaluation, current_state, now)
         return "manual"
     if (now - rt.pending.last_progress_at).total_seconds() >= cfg.confirm_window_s:
+        if current_state is CoverState.PARTIAL:
+            # Decision 27: the cover settled part-way through an engine move and stayed
+            # there for the whole confirm window -- the user pressed stop. `partial` is
+            # never contrary (§1.0), so this is the only place that can see it. The override
+            # dams the target the engine was moving toward; backoff and `unconfirmed` stay
+            # untouched because nothing failed.
+            p.owner = Owner.USER
+            p.manual_move_at = now
+            p.dam = rt.pending.target
+            p.dam_layer = DamLayer.OTHER
+            rt.pending = None
+            rt.contrary_since = None
+            return "manual"
         commands.on_unconfirmed(p, rt, cfg, now)
         return "unconfirmed"
     return None

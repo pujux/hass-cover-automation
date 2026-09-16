@@ -13,6 +13,7 @@ from custom_components.cover_automation.engine.model import (
     CoverPersisted,
     CoverRuntime,
     CoverState,
+    DamLayer,
     Decision,
     Desired,
     Layer,
@@ -101,6 +102,23 @@ def test_confirm_window_expiry_marks_unconfirmed_with_backoff():
     commands.on_command_sent(p, rt, Target.CLOSED, Layer.SHADING, s(800))
     check_pending(p, rt, CFG, CoverState.OPEN, s(920))
     assert rt.backoff_until == s(920 + 1200)  # doubled
+
+
+def test_confirm_window_expiry_is_a_user_stop_only_at_partial():
+    """I6/decision 27: a stop during an engine move is a manual move, not a failure."""
+    p, rt = CoverPersisted(), CoverRuntime(last_evaluation=SHADE)
+    commands.on_command_sent(p, rt, Target.CLOSED, Layer.SHADING, T0)
+    assert check_pending(p, rt, CFG, CoverState.PARTIAL, s(119)) is None
+    assert check_pending(p, rt, CFG, CoverState.PARTIAL, s(120)) == "manual"
+    assert p.owner is Owner.USER and p.manual_move_at == s(120)
+    assert p.dam is Target.CLOSED and p.dam_layer is DamLayer.OTHER  # dam = the engine's target
+    assert rt.pending is None and rt.contrary_since is None
+    assert not rt.unconfirmed and rt.backoff_until is None and rt.consecutive_failures == 0
+    # the same expiry at an end state is still a failed move: unconfirmed plus backoff
+    p2, rt2 = CoverPersisted(), CoverRuntime(last_evaluation=SHADE)
+    commands.on_command_sent(p2, rt2, Target.CLOSED, Layer.SHADING, T0)
+    assert check_pending(p2, rt2, CFG, CoverState.OPEN, s(120)) == "unconfirmed"
+    assert rt2.unconfirmed and p2.owner is Owner.ENGINE and p2.dam is None
 
 
 def test_late_match_without_pending_is_not_manual():
