@@ -327,11 +327,10 @@ def _select(options: list[str], translation_key: str) -> selector.SelectSelector
 
 
 def cover_schema(
-    hass: HomeAssistant, entry: ConfigEntry, defaults: Mapping[str, Any]
+    hass: HomeAssistant, entry: ConfigEntry, defaults: Mapping[str, Any], unit: str
 ) -> vol.Schema:
     d = defaults
     hub_has_wind = bool(entry.data.get(const.CONF_WIND_SENSOR))
-    unit = str(hass.config.units.temperature_unit)
     profiles = entry.get_subentries_of_type(const.SUBENTRY_PROFILE)
     profile_options: list[selector.SelectOptionDict] = [
         {"value": const.PROFILE_NONE, "label": "—"},
@@ -483,6 +482,11 @@ class CoverSubentryFlow(ConfigSubentryFlow):
     ) -> SubentryFlowResult:
         entry = self._get_entry()
         current: ConfigSubentry | None = self._get_reconfigure_subentry() if reconfigure else None
+        unit = str(
+            current.data.get(const.CONF_TEMPERATURE_UNIT, self.hass.config.units.temperature_unit)
+            if current is not None
+            else self.hass.config.units.temperature_unit
+        )
         errors: dict[str, str] = {}
         if user_input is not None:
             errors = validate_cover_input(
@@ -496,18 +500,20 @@ class CoverSubentryFlow(ConfigSubentryFlow):
                 friendly = cover_state.name if cover_state else str(data[const.CONF_COVER_ENTITY])
                 title = str(data.get(const.CONF_NAME) or friendly)
                 data[const.CONF_NAME] = title
-                data[const.CONF_TEMPERATURE_UNIT] = str(self.hass.config.units.temperature_unit)
+                data[const.CONF_TEMPERATURE_UNIT] = unit
                 wind_sensor = entry.data.get(const.CONF_WIND_SENSOR)
                 wind_state = self.hass.states.get(str(wind_sensor)) if wind_sensor else None
                 if wind_state is not None and wind_state.attributes.get("unit_of_measurement"):
                     data[const.CONF_WIND_UNIT] = str(wind_state.attributes["unit_of_measurement"])
+                elif current is not None and current.data.get(const.CONF_WIND_UNIT):
+                    data[const.CONF_WIND_UNIT] = current.data[const.CONF_WIND_UNIT]
                 if current is not None:
                     return self.async_update_and_abort(entry, current, title=title, data=data)
                 return self.async_create_entry(title=title, data=data)
         defaults: Mapping[str, Any] = user_input or (current.data if current else {})
         return self.async_show_form(
             step_id="reconfigure" if reconfigure else "user",
-            data_schema=cover_schema(self.hass, entry, defaults),
+            data_schema=cover_schema(self.hass, entry, defaults, unit),
             errors=errors,
         )
 
@@ -620,8 +626,9 @@ def profile_data_from_form(user_input: Mapping[str, Any]) -> dict[str, Any]:
         const.CONF_RULES: rules,
     }
     start, end = user_input.get(const.CONF_QUIET_START), user_input.get(const.CONF_QUIET_END)
-    if start and end:
-        data[const.CONF_QUIET_START], data[const.CONF_QUIET_END] = str(start), str(end)
+    if start or end:
+        data[const.CONF_QUIET_START] = str(start) if start else None
+        data[const.CONF_QUIET_END] = str(end) if end else None
     return data
 
 
