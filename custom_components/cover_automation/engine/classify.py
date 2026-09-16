@@ -1,4 +1,4 @@
-"""Actual-state classification (spec §1.0). Transition rules are added in Task 9."""
+"""Actual-state classification and transition rules (spec §1.0, §1.4)."""
 
 from __future__ import annotations
 

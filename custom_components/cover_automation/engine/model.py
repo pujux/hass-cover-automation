@@ -12,6 +12,7 @@ from .const import (
     COMFORT_FLOOR_C,
     CONFIRM_WINDOW_S,
     MIN_MOVE_INTERVAL_S,
+    OVERRIDE_DWELL_S,
     WIND_HOLD_S,
 )
 from .signals import ContinuousCondition
@@ -309,7 +310,9 @@ class CoverRuntime:
     command_failed: bool = False
     unconfirmed: bool = False
     contrary_since: datetime | None = None
-    override_dwell: ContinuousCondition = field(default_factory=lambda: ContinuousCondition(1800))
+    override_dwell: ContinuousCondition = field(
+        default_factory=lambda: ContinuousCondition(OVERRIDE_DWELL_S)
+    )
     last_simulated: tuple[Layer, Target] | None = None
     frost_conflict_notified: bool = False
     prev_wind_active: bool = False

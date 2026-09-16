@@ -51,12 +51,14 @@ class CoverEngine:
         self.config = config
         self.p = persisted
         if runtime is not None:
-            self.rt = runtime
+            self.rt = runtime  # injected runtime keeps its own dwell
         else:
             # §5 persists wind_active so a wind episode survives a restart: without the seed
             # a release during downtime is never detected and no restoring window opens.
-            self.rt = CoverRuntime(prev_wind_active=persisted.wind_active)
-        self.rt.override_dwell = ContinuousCondition(override_dwell_s)
+            self.rt = CoverRuntime(
+                override_dwell=ContinuousCondition(override_dwell_s),
+                prev_wind_active=persisted.wind_active,
+            )
 
     # -- evaluation -----------------------------------------------------------------
 
@@ -73,12 +75,18 @@ class CoverEngine:
         rt, p, cfg = self.rt, self.p, self.config
         if classify.is_settled(inputs.actual):
             rt.last_settled = inputs.actual  # baseline for C2, also right after a restart
+        p.wind_active = inputs.wind_active
+        if not p.enabled:
+            # §1.1: the engine never commands a disabled cover and no timers run for it.
+            disabled = Decision(Desired.LEAVE_ALONE, Layer.NONE, "disabled")
+            return StepResult(disabled, None, self.status(disabled, inputs), False, None)
+        if not signals.simulation:
+            rt.last_simulated = None  # a later simulation session starts from a clean slate
         if rule_fired:
             override.on_rule_fired(p)
         if cfg.wind_enabled and rt.prev_wind_active and not inputs.wind_active:
             rt.restoring_until = now + timedelta(seconds=RESTORING_WINDOW_S)
         rt.prev_wind_active = inputs.wind_active
-        p.wind_active = inputs.wind_active
         if inputs.schedule.open_rule_fired_at is not None and inputs.actual is CoverState.OPEN:
             rt.open_rule_satisfied_at = inputs.schedule.open_rule_fired_at
         restoring = rt.restoring_until is not None and now < rt.restoring_until

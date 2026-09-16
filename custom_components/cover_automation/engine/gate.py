@@ -76,7 +76,9 @@ def decide(
             return Suppress("reopening_off")
         if s.reopening_mode is ReopeningMode.PASSIVE and not p.owns(inputs.actual):
             return Suppress("reopening_passive")
-    # 7. moving: a state-change event will trigger re-evaluation
+    # 7. moving: §1.3 calls this "defer until settled". There is no time to defer to, so the
+    # engine suppresses and the controller surfaces `Suppress("moving")` as the cover's
+    # pending move (§4 `next_planned_action`); the settle transition re-evaluates.
     if inputs.actual is CoverState.MOVING:
         return Suppress("moving")
     # 8. minimum interval (shading only; clock = any send)

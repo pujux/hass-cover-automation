@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from custom_components.cover_automation.engine.const import OVERRIDE_DWELL_S
 from custom_components.cover_automation.engine.cover import CoverEngine
 from custom_components.cover_automation.engine.model import (
     CoverConfig,
     CoverInputs,
     CoverPersisted,
+    CoverRuntime,
     CoverState,
     DamLayer,
     Defer,
@@ -22,6 +24,7 @@ from custom_components.cover_automation.engine.model import (
     Target,
     TransitionKind,
 )
+from custom_components.cover_automation.engine.signals import ContinuousCondition
 
 from tests.engine.conftest import at
 
@@ -141,6 +144,46 @@ def test_wind_disabled_cover_gets_no_restoring_window():
     )
     e.evaluate(inp(actual=CoverState.CLOSED, sun_hits=False, wind_active=False), sig())
     assert e.rt.restoring_until is None
+
+
+def test_injected_runtime_keeps_its_own_dwell():
+    rt = CoverRuntime(override_dwell=ContinuousCondition(60))
+    e = CoverEngine(CFG, CoverPersisted(), rt)
+    assert e.rt is rt and e.rt.override_dwell.duration_s == 60.0
+    assert CoverRuntime().override_dwell.duration_s == float(OVERRIDE_DWELL_S)
+    assert CoverEngine(CFG, CoverPersisted()).rt.override_dwell.duration_s == float(
+        OVERRIDE_DWELL_S
+    )
+
+
+def test_disabled_cover_returns_early_and_runs_no_timers():
+    """§1.1: no commands and no timers for a disabled cover; wind is still recorded."""
+    e = CoverEngine(CFG, CoverPersisted(owner=Owner.USER, dam=Target.CLOSED, enabled=False))
+    e.rt.prev_wind_active = True
+    r = e.evaluate(inp(actual=CoverState.OPEN, wind_active=False), sig())
+    assert r.status is Status.DISABLED and r.action is None and r.next_check_at is None
+    assert r.decision.desired is Desired.LEAVE_ALONE and r.decision.reason == "disabled"
+    assert not r.notify_frost_conflict
+    assert e.rt.restoring_until is None  # no restoring window
+    assert e.rt.last_evaluation is None  # no bookkeeping at all
+    assert e.p.wind_active is False
+    r2 = e.evaluate(inp(actual=CoverState.OPEN, wind_active=True), sig())
+    assert e.p.wind_active is True and r2.status is Status.DISABLED
+    # an unavailable cover still reports that first (§4 precedence)
+    r3 = e.evaluate(inp(actual=CoverState.UNAVAILABLE), sig())
+    assert r3.status is Status.COVER_UNAVAILABLE
+
+
+def test_simulation_duplicate_suppression_resets_when_simulation_is_switched_off():
+    e = CoverEngine(CFG, CoverPersisted(owner=Owner.ENGINE, engine_target=Target.OPEN))
+    r = e.evaluate(inp(), sig(simulation=True))
+    assert r.action == Send(Target.CLOSED, Layer.SHADING, simulated=True)
+    e.on_command_sent(r.action, T0)
+    assert e.rt.last_simulated == (Layer.SHADING, Target.CLOSED)
+    e.evaluate(inp(), sig(T0 + timedelta(minutes=30)))  # hub back to real mode
+    assert e.rt.last_simulated is None
+    r2 = e.evaluate(inp(), sig(T0 + timedelta(hours=1), simulation=True))
+    assert r2.action == Send(Target.CLOSED, Layer.SHADING, simulated=True)
 
 
 def test_status_precedence_partial_over_override_and_disabled_first():
