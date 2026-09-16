@@ -18,7 +18,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.start import async_at_started
 
-from . import const
+from . import const, repairs
 from .config_map import CoverBindings, HubConfig, cover_config, hub_config, profile
 from .engine.model import CoverConfig, CoverPersisted
 from .engine.schedule import Profile
@@ -26,9 +26,6 @@ from .store import CoverAutomationStore
 
 _LOGGER = logging.getLogger(__name__)
 SUN_ENTITY = "sun.sun"
-_PROFILE_ISSUE_PREFIX = "missing_profile_"
-_BROKEN_COVER_ISSUE_PREFIX = "broken_cover_config_"
-_BROKEN_PROFILE_ISSUE_PREFIX = "broken_profile_config_"
 
 
 @dataclass(slots=True)
@@ -49,15 +46,15 @@ def _missing_entity_issue_id(entry: ConfigEntry, entity_id: str) -> str:
 
 
 def _missing_profile_issue_id(subentry_id: str) -> str:
-    return f"{_PROFILE_ISSUE_PREFIX}{subentry_id}"
+    return repairs.cover_issue_id("missing_profile", subentry_id)
 
 
 def _broken_cover_config_issue_id(subentry_id: str) -> str:
-    return f"{_BROKEN_COVER_ISSUE_PREFIX}{subentry_id}"
+    return repairs.cover_issue_id("broken_cover_config", subentry_id)
 
 
 def _broken_profile_config_issue_id(subentry_id: str) -> str:
-    return f"{_BROKEN_PROFILE_ISSUE_PREFIX}{subentry_id}"
+    return repairs.cover_issue_id("broken_profile_config", subentry_id)
 
 
 def _validate_required_entities(hass: HomeAssistant, hub: HubConfig) -> None:
@@ -94,20 +91,12 @@ def _optional_entity_ids(
 
 def _entry_issue_ids(entry: ConfigEntry, wanted_entities: Iterable[str]) -> set[str]:
     """Issue ids this entry currently owns: still-configured entities and subentries."""
-    ids = {_missing_entity_issue_id(entry, e) for e in wanted_entities}
-    ids.update(
-        _missing_profile_issue_id(s.subentry_id)
-        for s in entry.get_subentries_of_type(const.SUBENTRY_COVER)
+    return repairs.entry_owned_issue_ids(
+        entry,
+        wanted_entities,
+        [s.subentry_id for s in entry.get_subentries_of_type(const.SUBENTRY_COVER)],
+        [s.subentry_id for s in entry.get_subentries_of_type(const.SUBENTRY_PROFILE)],
     )
-    ids.update(
-        _broken_cover_config_issue_id(s.subentry_id)
-        for s in entry.get_subentries_of_type(const.SUBENTRY_COVER)
-    )
-    ids.update(
-        _broken_profile_config_issue_id(s.subentry_id)
-        for s in entry.get_subentries_of_type(const.SUBENTRY_PROFILE)
-    )
-    return ids
 
 
 def _delete_stale_issues(
@@ -115,14 +104,15 @@ def _delete_stale_issues(
 ) -> None:
     """Delete issues HA never clears on its own: ones whose reference has disappeared.
 
-    `missing_entity_*`, `missing_profile_*`, `broken_cover_config_*` and
-    `broken_profile_config_*` issues are only ever created or cleared for
-    entities/subentries that are still configured (see `_async_check_optional_entities` and
-    `async_setup_entry`). Once a reference disappears -- the wind sensor is cleared, a cover
-    subentry is deleted, or the whole entry is removed (call with `owned_issue_ids=set()`) --
-    nothing else deletes its issue, so it would otherwise linger in Repairs forever. Matching
-    these by a bare prefix (not scoped to this entry's current subentries) is safe because the
-    integration is `single_config_entry`: only one hub entry ever exists.
+    `missing_entity_*`, `missing_profile_*`, `broken_cover_config_*`, `broken_profile_config_*`
+    and every runtime issue kind in `repairs.ENTRY_ISSUE_PREFIXES` are only ever created or
+    cleared for entities/subentries that are still configured (see
+    `_async_check_optional_entities` and `async_setup_entry`). Once a reference disappears --
+    the wind sensor is cleared, a cover subentry is deleted, or the whole entry is removed (call
+    with `owned_issue_ids=set()`) -- nothing else deletes its issue, so it would otherwise linger
+    in Repairs forever. Matching these by a bare prefix (not scoped to this entry's current
+    subentries) is safe because the integration is `single_config_entry`: only one hub entry
+    ever exists.
     """
     registry = ir.async_get(hass)
     entity_prefix = f"missing_entity_{entry.entry_id}_"
@@ -132,10 +122,7 @@ def _delete_stale_issues(
         if domain == const.DOMAIN
         and issue_id not in owned_issue_ids
         and (
-            issue_id.startswith(entity_prefix)
-            or issue_id.startswith(_PROFILE_ISSUE_PREFIX)
-            or issue_id.startswith(_BROKEN_COVER_ISSUE_PREFIX)
-            or issue_id.startswith(_BROKEN_PROFILE_ISSUE_PREFIX)
+            issue_id.startswith(entity_prefix) or issue_id.startswith(repairs.ENTRY_ISSUE_PREFIXES)
         )
     ]
     for issue_id in stale:

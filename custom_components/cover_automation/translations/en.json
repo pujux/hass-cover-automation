@@ -297,6 +297,30 @@
       "description": "Schedule profile {profile} could not be loaded: {error}. Fix its configuration; the profile is skipped until then.",
       "title": "Schedule profile configuration is invalid"
     },
+    "command_failures": {
+      "description": "Three consecutive commands to {cover} failed or were never confirmed. Check the cover and its integration.",
+      "title": "Cover commands keep failing"
+    },
+    "cover_unsupported": {
+      "description": "{cover} does not support the position features Cover Automation needs and cannot be automated.",
+      "title": "Cover does not support required features"
+    },
+    "door_sensor_unavailable": {
+      "description": "{cover}'s door sensor is unavailable, so door protection cannot be evaluated for this cover.",
+      "title": "Door sensor is unavailable"
+    },
+    "forecast_fetch_failed": {
+      "description": "Cover Automation could not fetch the daily forecast from the weather entity. Hot-day evaluation is paused until it succeeds again.",
+      "title": "Daily forecast could not be fetched"
+    },
+    "frost_conflict": {
+      "description": "{cover} should open for wind or door protection, but the outdoor temperature is at or below the frost threshold so it was left in place.",
+      "title": "Wind or door protection blocked by frost"
+    },
+    "frost_source_unavailable": {
+      "description": "The outdoor temperature source used for frost protection is unavailable, so frost protection cannot be evaluated.",
+      "title": "Frost temperature source is unavailable"
+    },
     "missing_entity": {
       "description": "The entity {entity_id} referenced by Cover Automation does not exist. Fix the configuration or restore the entity.",
       "title": "Configured entity is missing"
@@ -304,6 +328,30 @@
     "missing_profile": {
       "description": "Cover {cover} references a schedule profile that was deleted. It behaves as if it had no profile until you pick another one.",
       "title": "Schedule profile is missing"
+    },
+    "room_sensor_unusable": {
+      "description": "{cover}'s room temperature sensor is unavailable or reporting an invalid value, so shading cannot use it.",
+      "title": "Room temperature sensor is unusable"
+    },
+    "rule_skipped": {
+      "description": "Rule {rule} in schedule profile {profile} could not run and was skipped.",
+      "title": "Schedule rule was skipped"
+    },
+    "sun_missing": {
+      "description": "sun.sun is unavailable, so Cover Automation cannot evaluate sun position for shading.",
+      "title": "Sun entity is missing"
+    },
+    "weather_unavailable": {
+      "description": "The weather entity configured for Cover Automation is unavailable, so sun and hot-day evaluation cannot run.",
+      "title": "Weather entity is unavailable"
+    },
+    "wind_sensor_unavailable": {
+      "description": "The wind sensor configured for Cover Automation is unavailable, so wind protection cannot be evaluated.",
+      "title": "Wind sensor is unavailable"
+    },
+    "wind_unit_changed": {
+      "description": "{cover}'s wind sensor used to report in {stored} but now reports in {current}. Check the sensor and the wind thresholds.",
+      "title": "Wind sensor unit changed"
     }
   },
   "options": {
