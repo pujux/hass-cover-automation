@@ -128,7 +128,9 @@ class CoverAutomationController:
         self._last_forecast_fetch: datetime | None = None
         self._watched: dict[str, set[str] | None] = {}
         self._problem = False
-        self._lock = asyncio.Lock()
+        # One lock per cover: an evaluation (and its blocking service call) only ever
+        # serialises that cover, so a slow device cannot stall the others or `async_stop`.
+        self._locks: dict[str, asyncio.Lock] = {cid: asyncio.Lock() for cid in covers}
         self.hub_view = HubView()
         # `cover_views` is the read-only face of `_cover_views` (same object): the entity-side
         # `ControllerProtocol` types it as an invariant `Mapping`, so the writable alias is
@@ -163,6 +165,7 @@ class CoverAutomationController:
         self._hub_signals.seed(now)
         await self._async_refresh_forecast(now, force=True)
         self._subscribe()
+        self._refresh_problem()
         self.started = True
         self._schedule.async_arm(now)
         await self.async_evaluate(now)
@@ -174,10 +177,12 @@ class CoverAutomationController:
 
     async def async_stop(self) -> None:
         self.started = False
-        # Waiting evaluations bail on the `started` re-check; taking the lock waits out the one
-        # that may already be mid-flight, so nothing can arm a timer after the cancel sweep.
-        async with self._lock:
-            self._async_cancel_all()
+        self._async_cancel_all()
+        # Drain every per-cover lock once: an evaluation that is already mid-flight finishes
+        # here, and the `started` re-checks keep it from arming anything behind the sweep.
+        for lock in self._locks.values():
+            async with lock:
+                pass
         await self._store.async_save()
 
     @callback
@@ -238,6 +243,8 @@ class CoverAutomationController:
         self.hass.async_create_task(self.async_evaluate(cover_ids=affected))
 
     async def _async_weather_changed(self) -> None:
+        if not self.started:
+            return
         now = dt_util.utcnow()
         await self._async_refresh_forecast(now, force=False)
         await self.async_evaluate(now)
@@ -247,9 +254,13 @@ class CoverAutomationController:
         self.hass.async_create_task(self._async_midnight())
 
     async def _async_midnight(self) -> None:
+        if not self.started:
+            return
         now = dt_util.utcnow()
         self._hub_signals.rollover(dt_util.as_local(now).date())
         await self._async_refresh_forecast(now, force=True)
+        if not self.started:  # `async_stop` may have run during the forecast fetch
+            return
         self._schedule.async_arm(now)
         await self.async_evaluate(now)
 
@@ -258,6 +269,8 @@ class CoverAutomationController:
         self.hass.async_create_task(self._async_forecast_tick())
 
     async def _async_forecast_tick(self) -> None:
+        if not self.started:
+            return
         now = dt_util.utcnow()
         await self._async_refresh_forecast(now, force=True)
         await self.async_evaluate(now)
@@ -267,7 +280,9 @@ class CoverAutomationController:
         self.hass.async_create_task(self.async_evaluate())
 
     @callback
-    def _on_issue_event(self, _event: Event[Any]) -> None:
+    def _on_issue_event(self, event: Event[Any]) -> None:
+        if event.data.get("domain") != const.DOMAIN:
+            return
         self._refresh_problem()
         self._publish()
 
@@ -303,28 +318,25 @@ class CoverAutomationController:
     ) -> None:
         if not self.started:
             return
-        ids = list(cover_ids) if cover_ids is not None else None
-        async with self._lock:
-            if not self.started:
-                return
-            at = now or dt_util.utcnow()
-            await self._async_evaluate_locked(at, ids, rule_fired)
-
-    async def _async_evaluate_locked(
-        self, now: datetime, cover_ids: list[str] | None, rule_fired: frozenset[str]
-    ) -> None:
-        ids = cover_ids if cover_ids is not None else list(self._engines)
+        at = now or dt_util.utcnow()
+        ids = list(cover_ids) if cover_ids is not None else list(self._engines)
         sun = sun_position(self.hass)
-        self._hub_signals.update(now)
-        self._update_hub_repairs(now, sun)
+        # Hub-level bookkeeping stays outside the per-cover locks.
+        self._hub_signals.update(at)
+        self._update_hub_repairs(at, sun)
         if sun is not None:
-            hub_sig = self._hub_signals.signals(now, self._store.data, sun[1])
+            hub_sig = self._hub_signals.signals(at, self._store.data, sun[1])
             for cover_id in ids:
+                if cover_id not in self._engines:
+                    continue
                 try:
-                    await self._evaluate_cover(cover_id, now, sun, hub_sig, cover_id in rule_fired)
+                    async with self._locks[cover_id]:
+                        await self._evaluate_cover(
+                            cover_id, at, sun, hub_sig, cover_id in rule_fired
+                        )
                 except Exception:  # per-cover isolation (spec §5)
                     _LOGGER.exception("Evaluation of cover %s failed", self.cover_names[cover_id])
-        self._update_profile_repairs(now)
+        self._update_profile_repairs(at)
         self._publish()
         self._store.schedule_save()
 
@@ -391,7 +403,9 @@ class CoverAutomationController:
         )
         inputs = sig.inputs(actual, schedule)
         result = engine.evaluate(inputs, hub_sig, rule_fired=rule_fired)
-        await self._act(cover_id, result, now)
+        if inputs.actual is not CoverState.UNAVAILABLE:
+            # A vanished entity can neither be commanded nor judged on its features.
+            await self._act(cover_id, result, now)
         self._update_cover_repairs(cover_id, sig)
         self._cover_views[cover_id] = self._build_cover_view(cover_id, result, inputs, now)
         self._arm_cover_timer(cover_id, result, sig, now)
@@ -440,6 +454,7 @@ class CoverAutomationController:
         except HomeAssistantError as err:
             _LOGGER.warning("%s: %s failed: %s", cfg.name, service, err)
             self._retry_at[cover_id] = engine.on_command_failed(now)
+            await self._store.async_save()
             return
         self._retry_at.pop(cover_id, None)
         self._last_engine_move[cover_id] = now
@@ -516,15 +531,20 @@ class CoverAutomationController:
         if not self.started:
             return
         now = dt_util.utcnow()
-        engine = self._engines[cover_id]
-        if engine.rt.pending is not None:
-            actual = await self._sync_actual(cover_id, now)
-            before = engine.p.to_dict()
-            if (message := engine.check_pending(actual, now)) is not None:
-                _LOGGER.debug("%s: %s", self.cover_names[cover_id], message)
-            if engine.p.to_dict() != before:
-                await self._store.async_save()
+        async with self._locks[cover_id]:
+            await self._async_check_pending(cover_id, now)
         await self.async_evaluate(now, cover_ids={cover_id})
+
+    async def _async_check_pending(self, cover_id: str, now: datetime) -> None:
+        engine = self._engines[cover_id]
+        if engine.rt.pending is None:
+            return
+        actual = await self._sync_actual(cover_id, now)
+        before = engine.p.to_dict()
+        if (message := engine.check_pending(actual, now)) is not None:
+            _LOGGER.debug("%s: %s", self.cover_names[cover_id], message)
+        if engine.p.to_dict() != before:
+            await self._store.async_save()
 
     # -- repairs -----------------------------------------------------------------------
 
@@ -736,12 +756,14 @@ class CoverAutomationController:
         _INTEGRATION_LOGGER.setLevel(logging.DEBUG if on else logging.NOTSET)
 
     async def async_set_enabled(self, cover_id: str, enabled: bool) -> None:
-        self._engines[cover_id].p.enabled = enabled
+        async with self._locks[cover_id]:
+            self._engines[cover_id].p.enabled = enabled
         await self._store.async_save()
         await self.async_evaluate(cover_ids={cover_id})
 
     async def async_set_mode(self, cover_id: str, mode: Mode) -> None:
-        self._engines[cover_id].p.mode = mode
+        async with self._locks[cover_id]:
+            self._engines[cover_id].p.mode = mode
         await self._store.async_save()
         await self.async_evaluate(cover_ids={cover_id})
 
@@ -768,8 +790,9 @@ class CoverAutomationController:
 
     async def async_reset_override(self, cover_id: str) -> None:
         now = dt_util.utcnow()
-        actual = await self._sync_actual(cover_id, now)
-        self._engines[cover_id].reset(actual, now)
+        async with self._locks[cover_id]:
+            actual = await self._sync_actual(cover_id, now)
+            self._engines[cover_id].reset(actual, now)
         await self._store.async_save()
         await self.async_evaluate(now, cover_ids={cover_id})
 

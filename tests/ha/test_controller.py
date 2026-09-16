@@ -12,28 +12,52 @@ from homeassistant.config_entries import ConfigSubentry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import (
     async_capture_events,
     async_fire_time_changed,
     async_mock_service,
 )
 
-from tests.ha.conftest import cover_subentry_data, set_cover, set_sensor, set_sun, set_weather
+from tests.ha.conftest import (
+    cover_subentry_data,
+    profile_subentry_data,
+    set_cover,
+    set_sensor,
+    set_sun,
+    set_weather,
+)
 
 HOT = TodayForecast(30.0, 18.0)
 
 
+def _subentry_id(hub_entry, subentry_type: str) -> str:
+    return next(
+        s.subentry_id for s in hub_entry.subentries.values() if s.subentry_type == subentry_type
+    )
+
+
 async def start_controller(
-    hass: HomeAssistant, hub_entry, *, forecast=HOT, cover_overrides=None, persisted=None
+    hass: HomeAssistant,
+    hub_entry,
+    *,
+    forecast=HOT,
+    cover_overrides=None,
+    persisted=None,
+    profile=None,
+    elevation=40.0,
 ):
     """Set up the hub (2a) with one cover subentry and start a controller on top of it."""
-    overrides = cover_overrides or {}
+    overrides = dict(cover_overrides or {})
+    if profile is not None:
+        hass.config_entries.async_add_subentry(hub_entry, ConfigSubentry(**profile))
+        overrides[const.CONF_SCHEDULE_PROFILE] = _subentry_id(hub_entry, const.SUBENTRY_PROFILE)
     hass.config_entries.async_add_subentry(
         hub_entry, ConfigSubentry(**cover_subentry_data("cover.bedroom", **overrides))
     )
-    sub_id = next(iter(hub_entry.subentries))
+    sub_id = _subentry_id(hub_entry, const.SUBENTRY_COVER)
     set_weather(hass, condition="sunny", temperature=20.0)
-    set_sun(hass, elevation=40.0, azimuth=180.0)
+    set_sun(hass, elevation=elevation, azimuth=180.0)
     set_sensor(hass, "sensor.wind", 5.0, unit="km/h", device_class="wind_speed")
     set_cover(hass, "cover.bedroom", state="open", position=100, features=3)
     assert await hass.config_entries.async_setup(hub_entry.entry_id)
@@ -301,3 +325,114 @@ async def test_stop_cancels_everything(hass, hub_entry, cover_services, freezer)
     assert (
         len(cover_services["close"]) == 1
     )  # nothing ran after stop (and no lingering timers at teardown)
+
+
+async def test_schedule_rule_fires_and_updates_views(hass, hub_entry, freezer):
+    """A fixed close rule fires, commands the cover and lands in the hub and cover views."""
+    closes: list[ServiceCall] = []
+
+    async def close(call: ServiceCall) -> None:
+        closes.append(call)
+        set_cover(hass, "cover.bedroom", state="closed", position=0)
+
+    hass.services.async_register("cover", "close_cover", close)
+    # The 07:00 open rule keeps yesterday's 21:30 close rule from holding the cover shut at
+    # 21:00 (a close rule is a standing hold until the next rule fires).
+    rules = [
+        {
+            const.CONF_RULE_ACTION: "closed",
+            const.CONF_RULE_TIME_MODE: "fixed",
+            const.CONF_RULE_TIME: "21:30:00",
+        },
+        {
+            const.CONF_RULE_ACTION: "open",
+            const.CONF_RULE_TIME_MODE: "fixed",
+            const.CONF_RULE_TIME: "07:00:00",
+        },
+    ]
+    freezer.move_to(dt_util.now().replace(hour=21, minute=0, second=0, microsecond=0))
+    controller, sub_id = await start_controller(
+        hass,
+        hub_entry,
+        forecast=TodayForecast(10.0, 5.0),
+        elevation=-10.0,
+        profile=profile_subentry_data("Night", rules=rules, quiet=None),
+    )
+    try:
+        assert not closes  # night, cold: nothing to do before the rule fires
+        assert controller.hub_view.next_event_action == "closed"
+        assert controller.hub_view.next_event_profile == "Night"
+        assert "schedule" in (controller.cover_views[sub_id].next_planned_action or "")
+        freezer.tick(timedelta(minutes=31))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+        assert len(closes) == 1
+        assert "rule 1" in (controller.cover_views[sub_id].active_rule or "")
+    finally:
+        await controller.async_stop()
+
+
+async def test_rule_skipped_repair(hass, hub_entry, cover_services, freezer):
+    """A sunset rule that quiet hours swallow raises one repair per profile."""
+    rules = [
+        {
+            const.CONF_RULE_ACTION: "closed",
+            const.CONF_RULE_TIME_MODE: "sunset",
+            const.CONF_RULE_OFFSET: 0,
+        }
+    ]
+    controller, _sub_id = await start_controller(
+        hass,
+        hub_entry,
+        profile=profile_subentry_data("Night", rules=rules, quiet=("00:00:00", "23:59:00")),
+    )
+    try:
+        profile_id = _subentry_id(hub_entry, const.SUBENTRY_PROFILE)
+        issue = ir.async_get(hass).async_get_issue(const.DOMAIN, f"rule_skipped_{profile_id}")
+        assert issue is not None
+        assert issue.translation_placeholders == {"profile": "Night", "rule": "1"}
+    finally:
+        await controller.async_stop()
+
+
+async def test_problem_flag_is_seeded_at_start(hass, hub_entry, cover_services, freezer):
+    """An issue that already exists before the controller starts shows up in the hub view."""
+    # An id outside `repairs.ENTRY_ISSUE_PREFIXES`: the setup-time stale sweep leaves it alone
+    # and the controller never clears it, so only the seeding in `async_start` can surface it.
+    ir.async_create_issue(
+        hass,
+        const.DOMAIN,
+        "pre_existing_problem",
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="sun_missing",
+    )
+    controller, _sub_id = await start_controller(hass, hub_entry)
+    try:
+        assert controller.hub_view.problem is True
+    finally:
+        await controller.async_stop()
+
+
+async def test_midnight_task_after_stop_arms_nothing(hass, hub_entry, cover_services, freezer):
+    """A trigger task created just before `async_stop` must not re-arm the schedule (F1)."""
+    rules = [
+        {
+            const.CONF_RULE_ACTION: "closed",
+            const.CONF_RULE_TIME_MODE: "fixed",
+            const.CONF_RULE_TIME: "21:30:00",
+        }
+    ]
+    controller, _sub_id = await start_controller(
+        hass, hub_entry, profile=profile_subentry_data("Night", rules=rules, quiet=None)
+    )
+    assert controller._schedule._unsub is not None
+    commands = len(cover_services["close"])
+    await controller.async_stop()
+    assert controller._schedule._unsub is None
+    controller._on_midnight(dt_util.utcnow())
+    controller._on_forecast_tick(dt_util.utcnow())
+    controller._on_fallback_tick(dt_util.utcnow())
+    await hass.async_block_till_done()
+    assert controller._schedule._unsub is None
+    assert len(cover_services["close"]) == commands  # nothing evaluated after the stop
