@@ -288,6 +288,110 @@
       }
     }
   },
+  "entity": {
+    "binary_sensor": {
+      "any_wind_protection_active": {
+        "name": "Any wind protection active"
+      },
+      "frost_active": {
+        "name": "Frost protection active"
+      },
+      "hot_day": {
+        "name": "Hot day"
+      },
+      "manual_override": {
+        "name": "Manual override"
+      },
+      "problem": {
+        "name": "Problem"
+      },
+      "sun_hits": {
+        "name": "Sun hits window"
+      },
+      "sunny": {
+        "name": "Sunny"
+      },
+      "wind_protection_active": {
+        "name": "Wind protection active"
+      }
+    },
+    "button": {
+      "evaluate_now": {
+        "name": "Evaluate now"
+      },
+      "reset_override": {
+        "name": "Reset override"
+      }
+    },
+    "select": {
+      "mode": {
+        "name": "Mode",
+        "state": {
+          "auto": "Automatic",
+          "dark_only": "Darkening only",
+          "protection_only": "Protection only"
+        }
+      },
+      "reopening_mode": {
+        "name": "Reopening mode",
+        "state": {
+          "active": "Active",
+          "off": "Off",
+          "passive": "Passive"
+        }
+      },
+      "shading_mode": {
+        "name": "Shading mode",
+        "state": {
+          "auto": "Automatic",
+          "forced_all": "Forced on all covers",
+          "forced_sunlit": "Forced on sunlit covers",
+          "off": "Off"
+        }
+      }
+    },
+    "sensor": {
+      "forecast_max_today": {
+        "name": "Forecast high today"
+      },
+      "forecast_min_today": {
+        "name": "Forecast low today"
+      },
+      "next_scheduled_event": {
+        "name": "Next scheduled event"
+      },
+      "status": {
+        "name": "Status",
+        "state": {
+          "closed_shading": "Closed for shading",
+          "command_failed": "Command failed",
+          "cover_unavailable": "Cover unavailable",
+          "disabled": "Disabled",
+          "door_open": "Door open",
+          "held_frost": "Held by frost protection",
+          "idle": "Idle",
+          "manual_override": "Manual override",
+          "open_no_shade": "Open, no shading needed",
+          "partial": "Partially open",
+          "protected_wind": "Protected from wind",
+          "quiet_hours": "Quiet hours",
+          "schedule_hold": "Held by schedule",
+          "unconfirmed": "Waiting for confirmation"
+        }
+      }
+    },
+    "switch": {
+      "enabled": {
+        "name": "Automation enabled"
+      },
+      "simulation_mode": {
+        "name": "Simulation mode"
+      },
+      "verbose_logging": {
+        "name": "Verbose logging"
+      }
+    }
+  },
   "issues": {
     "broken_cover_config": {
       "description": "Cover {cover} could not be loaded: {error}. Fix its configuration; the cover is skipped until then.",
@@ -429,6 +533,16 @@
         "hold": "Hold position",
         "open": "Force open"
       }
+    }
+  },
+  "services": {
+    "evaluate_now": {
+      "description": "Re-evaluates the targeted covers immediately and moves any whose desired state differs from where they are. Without a target every cover is evaluated.",
+      "name": "Evaluate now"
+    },
+    "reset_override": {
+      "description": "Clears the manual override on the targeted covers, handing them back to the automation. Without a target every cover's override is cleared.",
+      "name": "Reset override"
     }
   }
 }
