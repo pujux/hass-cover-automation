@@ -109,6 +109,11 @@ class CoverAutomationController:
         self._store = store
         self.hub_device_id = hub_device_id
         self.started = False
+        # `async_at_started` hands back a no-op unsubscribe once Home Assistant is running, so
+        # a reload cannot cancel the pending start job. `async_start` therefore re-checks this
+        # flag after every await: an `async_stop` that lands mid-start must win, or the start
+        # would finish on a dead entry (live listeners, armed timers, real commands).
+        self._stopped = False
         self.cover_names: Mapping[str, str] = {cid: cfg.name for cid, (cfg, _b) in covers.items()}
         self._engines: dict[str, CoverEngine] = {}
         self._signals: dict[str, CoverSignalSet] = {}
@@ -147,6 +152,10 @@ class CoverAutomationController:
         return self._engines[cover_id]
 
     async def async_start(self) -> None:
+        if self._stopped:
+            # Stopped before the deferred start job even got to run. A controller is built
+            # per entry setup and never restarted, so a stop is final.
+            return
         now = dt_util.utcnow()
         for cover_id, (cfg, bind) in self._covers.items():
             persisted = self._store.data.covers.setdefault(cover_id, CoverPersisted())
@@ -164,11 +173,19 @@ class CoverAutomationController:
         self._apply_verbose(self._store.data.verbose)
         self._hub_signals.seed(now)
         await self._async_refresh_forecast(now, force=True)
+        if self._stopped:
+            # Stopped while the forecast fetch was in flight: subscribe to nothing, arm
+            # nothing, stay `started = False`.
+            return
         self._subscribe()
         self._refresh_problem()
         self.started = True
         self._schedule.async_arm(now)
         await self.async_evaluate(now)
+        if self._stopped:
+            # Stopped during the first evaluation: `async_stop` already cancelled everything
+            # this start registered, so only the flags are left to undo.
+            self.started = False
 
     async def async_start_job(self, hass: HomeAssistant) -> None:
         """Coroutine job for `async_at_started` (Task 9 wiring)."""
@@ -176,6 +193,7 @@ class CoverAutomationController:
         await self.async_start()
 
     async def async_stop(self) -> None:
+        self._stopped = True
         self.started = False
         self._async_cancel_all()
         # Drain every per-cover lock once: an evaluation that is already mid-flight finishes

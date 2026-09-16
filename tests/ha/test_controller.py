@@ -486,3 +486,52 @@ async def test_evaluation_waiting_on_a_lock_does_nothing_after_stop(
     await hass.async_block_till_done()
     assert len(cover_services["close"]) == commands
     assert controller._cover_timers == {}
+
+
+async def test_stop_during_start_leaves_nothing_running(hass, hub_entry, cover_services):
+    """A reload that unloads while the start job is still fetching the forecast must win.
+
+    `async_at_started` hands back a no-op unsubscribe once HA is running, so the start job
+    cannot be cancelled: `async_start` has to notice the stop itself and subscribe to nothing.
+    """
+    hass.config_entries.async_add_subentry(
+        hub_entry, ConfigSubentry(**cover_subentry_data("cover.bedroom"))
+    )
+    set_weather(hass, condition="sunny", temperature=20.0)
+    set_sun(hass, elevation=40.0, azimuth=180.0)
+    set_sensor(hass, "sensor.wind", 5.0, unit="km/h")
+    set_cover(hass, "cover.bedroom", state="open", position=100, features=3)
+    hass.set_state(CoreState.starting)  # park the entry's own controller (see start_controller)
+    assert await hass.config_entries.async_setup(hub_entry.entry_id)
+    data = hub_entry.runtime_data
+    controller = CoverAutomationController(
+        hass,
+        hub_entry,
+        hub=data.hub,
+        covers=data.covers,
+        profiles=data.profiles,
+        store=data.store,
+        hub_device_id=data.hub_device_id,
+    )
+    blocked = asyncio.Event()
+
+    async def slow_fetch(*args, **kwargs):
+        await blocked.wait()
+        return HOT
+
+    with patch(
+        "custom_components.cover_automation.controller.async_fetch_today",
+        AsyncMock(side_effect=slow_fetch),
+    ):
+        start = hass.async_create_task(controller.async_start())
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert not start.done()
+        await controller.async_stop()
+        blocked.set()
+        await start
+
+    assert controller.started is False
+    assert controller._unsubs == []
+    assert controller._schedule._unsub is None
+    assert not cover_services["close"]

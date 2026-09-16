@@ -329,10 +329,9 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: CoverAutomationConfigEntry) -> bool:
-    # Stop first: cancels every subscription and timer and drains in-flight evaluations, so
-    # nothing can write to the Store (or command a cover) after the save below.
+    # Stop first: cancels every subscription and timer, drains in-flight evaluations and
+    # saves the Store, so nothing can write to it (or command a cover) afterwards.
     await entry.runtime_data.controller.async_stop()
-    await entry.runtime_data.store.async_save()
     return await hass.config_entries.async_unload_platforms(entry, const.PLATFORMS)
 
 
