@@ -748,6 +748,11 @@ async def test_frost_conflict_notifies_once_and_is_dismissed_when_it_clears(
     hass, hub_entry, cover_services, freezer
 ):
     """F7b/F12: frost beats wind, notifies once, and cleans up when the frost goes away."""
+    hass.config_entries.async_update_entry(
+        hub_entry,
+        data={**hub_entry.data, const.CONF_OUTDOOR_TEMPERATURE_SENSOR: "sensor.outdoor"},
+    )
+    set_sensor(hass, "sensor.outdoor", -5.0, unit="°C", device_class="temperature")
     controller, sub_id = await build_controller(
         hass,
         hub_entry,
@@ -759,7 +764,6 @@ async def test_frost_conflict_notifies_once_and_is_dismissed_when_it_clears(
         },
         cover_state=("closed", 0, 3),
     )
-    set_weather(hass, condition="sunny", temperature=-5.0)  # the frost source (no outdoor sensor)
     set_sensor(hass, "sensor.wind", 75.0, unit="km/h", device_class="wind_speed")
     reg = ir.async_get(hass)
     issue_id = f"frost_conflict_{sub_id}"
@@ -781,7 +785,7 @@ async def test_frost_conflict_notifies_once_and_is_dismissed_when_it_clears(
             assert create.call_args.kwargs["notification_id"] == f"cover_automation_frost_{sub_id}"
             await controller.async_evaluate_now()
             assert create.call_count == 1  # notified once per conflict, not per evaluation
-            set_weather(hass, condition="sunny", temperature=10.0)
+            set_sensor(hass, "sensor.outdoor", 10.0, unit="°C", device_class="temperature")
             await hass.async_block_till_done()
             assert reg.async_get_issue(const.DOMAIN, issue_id) is None
             assert len(cover_services["open"]) == 1  # wind may protect the cover again
