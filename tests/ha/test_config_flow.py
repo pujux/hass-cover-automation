@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from custom_components.cover_automation import const
+from custom_components.cover_automation import config_flow, const
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
 
 from tests.ha.conftest import WEATHER, hub_options, set_sensor, set_weather
 
@@ -78,6 +79,35 @@ async def test_options_flow_updates_thresholds(hass: HomeAssistant, hub_entry) -
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert hub_entry.options[const.CONF_FROST_THRESHOLD] == -1.0
     assert hub_entry.options[const.CONF_HOT_LOW_ENABLED] is False
+    assert set(hub_entry.options) == set(hub_options())
+
+
+async def test_options_flow_keeps_stored_temperature_unit_after_unit_system_change(
+    hass: HomeAssistant, hub_entry
+) -> None:
+    """Options are rendered and re-saved in the unit they were stored in, not the
+    household's current unit system, so switching units never silently relabels a
+    value without converting it."""
+    set_weather(hass)
+    hass.config.units = US_CUSTOMARY_SYSTEM
+    result = await hass.config_entries.options.async_init(hub_entry.entry_id)
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "init"
+    posted = {k: v for k, v in hub_options().items() if k != const.CONF_TEMPERATURE_UNIT}
+    result = await hass.config_entries.options.async_configure(result["flow_id"], posted)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert hub_entry.options[const.CONF_TEMPERATURE_UNIT] == "°C"
+
+
+def test_thresholds_schema_converts_temperature_bounds_for_fahrenheit() -> None:
+    """Temperature bounds and defaults are stated in °C in the code and must be
+    converted to the household's unit before being handed to the NumberSelector."""
+    schema = config_flow.thresholds_schema({}, "°F")
+    fields = {str(key): (key, value) for key, value in schema.schema.items()}
+    _, frost_selector = fields[const.CONF_FROST_THRESHOLD]
+    assert frost_selector(32) == 32  # 0 °C == 32 °F; would raise if bounds stayed in °C
+
+    hot_high_marker, _ = fields[const.CONF_HOT_HIGH]
+    assert hot_high_marker.default() == 75.0  # 24 °C -> 75.2 °F -> rounds to 75.0
 
 
 async def test_reconfigure_flow_changes_hub_entities(hass: HomeAssistant, hub_entry) -> None:

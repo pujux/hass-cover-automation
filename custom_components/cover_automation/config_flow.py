@@ -14,26 +14,12 @@ from homeassistant.config_entries import (
     ConfigSubentryFlow,
     OptionsFlow,
 )
+from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import selector
+from homeassistant.util.unit_conversion import TemperatureConverter
 
 from . import const
-
-_HUB_OPTION_KEYS: tuple[str, ...] = (
-    const.CONF_FROST_THRESHOLD,
-    const.CONF_SUNNY_CONDITIONS,
-    const.CONF_SUNNY_ON_DELAY,
-    const.CONF_SUNNY_OFF_DELAY,
-    const.CONF_WEATHER_GRACE,
-    const.CONF_HOT_HIGH,
-    const.CONF_HOT_LOW,
-    const.CONF_HOT_LOW_ENABLED,
-    const.CONF_SUNNY_OVERRIDE_ENTITY,
-    const.CONF_HOT_OVERRIDE_ENTITY,
-    const.CONF_SUN_RELEASE_MARGIN,
-    const.CONF_TOLERANCE,
-    const.CONF_OVERRIDE_DWELL,
-)
 
 
 def _number(
@@ -55,6 +41,24 @@ def _entity(domain: str, *, device_class: str | None = None) -> selector.EntityS
     if device_class:
         config["device_class"] = device_class
     return selector.EntitySelector(config)
+
+
+def _temperature_default(value_c: float, unit: str) -> float:
+    """Convert a °C value to `unit`, rounded to the nearest 0.5.
+
+    Used for schema bounds and for the built-in DEFAULT_* fallbacks, which are always
+    expressed in °C. A stored option value is already in its recorded unit and must
+    never go through this conversion.
+    """
+    if unit == UnitOfTemperature.CELSIUS:
+        return value_c
+    converted = TemperatureConverter.convert(value_c, UnitOfTemperature.CELSIUS, unit)
+    return round(converted * 2) / 2
+
+
+def _temperature(min_c: float, max_c: float, unit: str) -> selector.NumberSelector:
+    """A temperature NumberSelector; bounds are given in °C and converted to `unit`."""
+    return _number(_temperature_default(min_c, unit), _temperature_default(max_c, unit), 0.5, unit)
 
 
 def hub_data_schema(defaults: Mapping[str, Any] | None = None) -> vol.Schema:
@@ -86,18 +90,29 @@ def thresholds_schema(defaults: Mapping[str, Any], temperature_unit: str) -> vol
         {
             vol.Required(
                 const.CONF_FROST_THRESHOLD,
-                default=dflt(const.CONF_FROST_THRESHOLD, const.DEFAULT_FROST_THRESHOLD),
-            ): _number(-30, 30, 0.5, temperature_unit),
+                default=dflt(
+                    const.CONF_FROST_THRESHOLD,
+                    _temperature_default(const.DEFAULT_FROST_THRESHOLD, temperature_unit),
+                ),
+            ): _temperature(-30, 30, temperature_unit),
             vol.Required(
-                const.CONF_HOT_HIGH, default=dflt(const.CONF_HOT_HIGH, const.DEFAULT_HOT_HIGH)
-            ): _number(-30, 60, 0.5, temperature_unit),
+                const.CONF_HOT_HIGH,
+                default=dflt(
+                    const.CONF_HOT_HIGH,
+                    _temperature_default(const.DEFAULT_HOT_HIGH, temperature_unit),
+                ),
+            ): _temperature(-30, 60, temperature_unit),
             vol.Required(
                 const.CONF_HOT_LOW_ENABLED,
                 default=dflt(const.CONF_HOT_LOW_ENABLED, const.DEFAULT_HOT_LOW_ENABLED),
             ): selector.BooleanSelector(),
             vol.Required(
-                const.CONF_HOT_LOW, default=dflt(const.CONF_HOT_LOW, const.DEFAULT_HOT_LOW)
-            ): _number(-30, 60, 0.5, temperature_unit),
+                const.CONF_HOT_LOW,
+                default=dflt(
+                    const.CONF_HOT_LOW,
+                    _temperature_default(const.DEFAULT_HOT_LOW, temperature_unit),
+                ),
+            ): _temperature(-30, 60, temperature_unit),
             vol.Required(
                 const.CONF_SUNNY_CONDITIONS,
                 default=dflt(const.CONF_SUNNY_CONDITIONS, const.DEFAULT_SUNNY_CONDITIONS),
@@ -144,6 +159,11 @@ def thresholds_schema(defaults: Mapping[str, Any], temperature_unit: str) -> vol
     )
 
 
+_HUB_OPTION_KEYS: tuple[str, ...] = tuple(
+    str(key) for key in thresholds_schema({}, UnitOfTemperature.CELSIUS).schema
+)
+
+
 def validate_weather(hass: HomeAssistant, entity_id: str) -> str | None:
     """Return an error key, or None when the weather entity is usable."""
     state = hass.states.get(entity_id)
@@ -164,9 +184,13 @@ def _clean_optional_entities(user_input: dict[str, Any], keys: tuple[str, ...]) 
     return cleaned
 
 
-def _complete_options(user_input: Mapping[str, Any], hass: HomeAssistant) -> dict[str, Any]:
-    """Fill defaults for every hub option and record the unit thresholds were entered in."""
-    unit = str(hass.config.units.temperature_unit)
+def _complete_options(user_input: Mapping[str, Any], unit: str) -> dict[str, Any]:
+    """Fill defaults for every hub option and record the unit thresholds were entered in.
+
+    `unit` must be the unit the caller rendered/interpreted the thresholds form in (the
+    current unit system for the config flow, the entry's already-stored unit for the
+    options flow) so values are never silently relabelled without conversion.
+    """
     filled = {
         const.CONF_FROST_THRESHOLD: const.DEFAULT_FROST_THRESHOLD,
         const.CONF_SUNNY_CONDITIONS: list(const.DEFAULT_SUNNY_CONDITIONS),
@@ -229,16 +253,14 @@ class CoverAutomationConfigFlow(ConfigFlow, domain=const.DOMAIN):
     async def async_step_thresholds(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        unit = str(self.hass.config.units.temperature_unit)
         if user_input is not None:
             return self.async_create_entry(
                 title="Cover Automation",
                 data=self._hub_data,
-                options=_complete_options(user_input, self.hass),
+                options=_complete_options(user_input, unit),
             )
-        return self.async_show_form(
-            step_id="thresholds",
-            data_schema=thresholds_schema({}, str(self.hass.config.units.temperature_unit)),
-        )
+        return self.async_show_form(step_id="thresholds", data_schema=thresholds_schema({}, unit))
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
@@ -265,13 +287,13 @@ class CoverAutomationOptionsFlow(OptionsFlow):
     """Thresholds and behaviour; a plain OptionsFlow because the entry has an update listener."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        if user_input is not None:
-            return self.async_create_entry(data=_complete_options(user_input, self.hass))
         unit = str(
             self.config_entry.options.get(
                 const.CONF_TEMPERATURE_UNIT, self.hass.config.units.temperature_unit
             )
         )
+        if user_input is not None:
+            return self.async_create_entry(data=_complete_options(user_input, unit))
         return self.async_show_form(
             step_id="init", data_schema=thresholds_schema(self.config_entry.options, unit)
         )
