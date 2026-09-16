@@ -1,0 +1,18 @@
+reset_override:
+  target:
+    entity:
+      integration: cover_automation
+      domain:
+        - sensor
+        - binary_sensor
+    device:
+      integration: cover_automation
+evaluate_now:
+  target:
+    entity:
+      integration: cover_automation
+      domain:
+        - sensor
+        - binary_sensor
+    device:
+      integration: cover_automation
