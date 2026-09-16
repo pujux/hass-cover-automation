@@ -315,6 +315,7 @@ class CoverRuntime:
     restoring_until: datetime | None = None
     open_rule_satisfied_at: datetime | None = None  # fire time of the open rule already satisfied
     last_evaluation: Decision | None = None
+    last_settled: CoverState | None = None  # last settled state seen (C2: blips are not moves)
 
 
 @dataclass(frozen=True, slots=True)

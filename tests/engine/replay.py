@@ -76,6 +76,16 @@ class Sim:
             self.actual = state
             self.engine.on_transition(state, self.now)
 
+    def blip(self) -> None:
+        """A connectivity dropout: the cover goes unavailable and returns in the same state.
+
+        Instantaneous on purpose -- a controller skips an unavailable cover (spec §5), so no
+        evaluation happens in between.
+        """
+        state = self.actual
+        self.set_actual(CoverState.UNAVAILABLE)
+        self.set_actual(state)
+
     def manual(self, state: CoverState) -> None:
         """The user moves the cover by hand (instantly)."""
         self._arrival = None

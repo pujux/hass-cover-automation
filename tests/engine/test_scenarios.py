@@ -170,6 +170,38 @@ def test_c_wind_under_hold_with_quiet_hours_recloses_at_release():
     assert sim.actual is CoverState.CLOSED and sim.commands[-1][2] is Layer.SCHEDULE  # restoring
 
 
+def test_c2_unavailable_blip_does_not_release_a_schedule_hold():
+    """C2: the cover drops off the network under a close hold and comes back closed.
+
+    Active reopening makes the difference visible: if the blip were recorded as a manual
+    move, `manual_move_at` would release the 21:30 hold (decision 22) and the shading layer
+    would open the cover the next morning.
+    """
+    sim = Sim(
+        CFG,
+        at("2026-07-01", "21:00"),
+        profile=Profile("p", "p", (CLOSE_2130,)),
+        reopening=ReopeningMode.ACTIVE,
+        actual=CoverState.CLOSED,
+        persisted=CoverPersisted(
+            owner=Owner.USER,  # the user closed it by hand at 20:30
+            engine_target=Target.OPEN,
+            manual_move_at=at("2026-07-01", "20:30"),
+        ),
+    )
+    sim.night()
+    sim.until("2026-07-01", "21:31")  # the 21:30 rule fires: the hold is armed again
+    assert sim.engine.p.dam is None and sim.engine.p.owner is Owner.USER
+    sim.until("2026-07-01", "23:00")
+    sim.blip()
+    assert sim.engine.p.manual_move_at == at("2026-07-01", "20:30")  # not rewritten
+    assert sim.engine.p.dam is None  # no spurious override either
+    sim.until("2026-07-02", "07:00")
+    sim.day(hits=False)  # sun up but off the window: shading would want open
+    sim.until("2026-07-02", "07:30")
+    assert sim.actual is CoverState.CLOSED and sim.commands == []
+
+
 def test_d_door_under_hold_then_manual_close_then_reset_at_night():
     sim = Sim(CFG, at("2026-07-01", "21:00"), profile=Profile("p", "p", (CLOSE_2130,)))
     sim.night()

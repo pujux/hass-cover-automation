@@ -46,33 +46,45 @@ def is_contrary(state: CoverState, target: Target) -> bool:
     )
 
 
-def on_transition(
-    p: CoverPersisted, rt: CoverRuntime, cfg: CoverConfig, new_state: CoverState, now: datetime
-) -> TransitionResult:
-    del cfg  # reserved for per-cover rules; the confirm window is checked in check_pending
+def _kind(
+    p: CoverPersisted, rt: CoverRuntime, new_state: CoverState, now: datetime
+) -> TransitionKind:
     pending = rt.pending
     if pending is not None:
         if pending.target.matches(new_state):
             commands.confirm(rt)
-            return TransitionResult(TransitionKind.MATCH, new_state)
+            return TransitionKind.MATCH
         if is_contrary(new_state, pending.target):
             if rt.contrary_since is None:
                 rt.contrary_since = now
-            return TransitionResult(TransitionKind.PENDING_PROGRESS, new_state)
+            return TransitionKind.PENDING_PROGRESS
         pending.last_progress_at = now
         rt.contrary_since = None
-        return TransitionResult(TransitionKind.PENDING_PROGRESS, new_state)
+        return TransitionKind.PENDING_PROGRESS
     if new_state in (CoverState.MOVING, CoverState.UNAVAILABLE):
-        return TransitionResult(TransitionKind.IGNORED, new_state)
+        return TransitionKind.IGNORED
+    if new_state is rt.last_settled:
+        # C2: an unavailable/moving round trip back to the same settled state is not a move.
+        return TransitionKind.IGNORED
     if (
         p.owner is Owner.ENGINE
         and p.engine_target is not None
         and p.engine_target.matches(new_state)
     ):
         commands.confirm(rt)
-        return TransitionResult(TransitionKind.LATE_MATCH, new_state)
+        return TransitionKind.LATE_MATCH
     override.on_manual_move(p, rt.last_evaluation, new_state, now)
-    return TransitionResult(TransitionKind.MANUAL, new_state)
+    return TransitionKind.MANUAL
+
+
+def on_transition(
+    p: CoverPersisted, rt: CoverRuntime, cfg: CoverConfig, new_state: CoverState, now: datetime
+) -> TransitionResult:
+    del cfg  # reserved for per-cover rules; the confirm window is checked in check_pending
+    kind = _kind(p, rt, new_state, now)
+    if is_settled(new_state):
+        rt.last_settled = new_state
+    return TransitionResult(kind, new_state)
 
 
 def pending_deadline(rt: CoverRuntime, cfg: CoverConfig) -> datetime | None:

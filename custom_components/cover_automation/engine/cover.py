@@ -46,6 +46,8 @@ class CoverEngine:
     ) -> StepResult:
         now = signals.now
         rt, p, cfg = self.rt, self.p, self.config
+        if classify.is_settled(inputs.actual):
+            rt.last_settled = inputs.actual  # baseline for C2, also right after a restart
         if rule_fired:
             override.on_rule_fired(p)
         if rt.prev_wind_active and not inputs.wind_active:

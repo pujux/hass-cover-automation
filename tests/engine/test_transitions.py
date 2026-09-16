@@ -119,6 +119,32 @@ def test_manual_move_without_pending_uses_last_evaluation():
     assert p.engine_target is Target.CLOSED
 
 
+def test_unavailable_round_trip_to_the_same_state_is_not_a_manual_move():
+    """C2: a connectivity blip must not release schedule holds or create an override."""
+    p = CoverPersisted(owner=Owner.USER, engine_target=Target.OPEN, manual_move_at=s(-3600))
+    rt = CoverRuntime(last_evaluation=SHADE, last_settled=CoverState.CLOSED)
+    assert on_transition(p, rt, CFG, CoverState.UNAVAILABLE, s(1)).kind is TransitionKind.IGNORED
+    assert on_transition(p, rt, CFG, CoverState.CLOSED, s(60)).kind is TransitionKind.IGNORED
+    assert p.manual_move_at == s(-3600) and p.dam is None and p.owner is Owner.USER
+
+
+def test_moving_round_trip_to_the_same_state_is_not_a_manual_move():
+    p = CoverPersisted(owner=Owner.USER, engine_target=Target.OPEN)
+    rt = CoverRuntime(last_evaluation=SHADE, last_settled=CoverState.CLOSED)
+    assert on_transition(p, rt, CFG, CoverState.MOVING, s(1)).kind is TransitionKind.IGNORED
+    assert on_transition(p, rt, CFG, CoverState.CLOSED, s(60)).kind is TransitionKind.IGNORED
+    assert p.manual_move_at is None and p.dam is None
+
+
+def test_unavailable_round_trip_to_a_different_state_is_a_manual_move():
+    p = CoverPersisted(owner=Owner.USER, engine_target=Target.OPEN)
+    rt = CoverRuntime(last_evaluation=SHADE, last_settled=CoverState.CLOSED)
+    assert on_transition(p, rt, CFG, CoverState.UNAVAILABLE, s(1)).kind is TransitionKind.IGNORED
+    assert on_transition(p, rt, CFG, CoverState.OPEN, s(60)).kind is TransitionKind.MANUAL
+    assert p.manual_move_at == s(60) and p.dam is Target.CLOSED
+    assert rt.last_settled is CoverState.OPEN
+
+
 def test_command_failed_retries_after_30s_then_backs_off():
     p, rt = CoverPersisted(), CoverRuntime()
     commands.on_command_sent(p, rt, Target.CLOSED, Layer.SHADING, T0)
