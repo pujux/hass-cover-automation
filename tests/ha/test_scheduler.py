@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, time, timedelta
 
 from custom_components.cover_automation.engine.model import CoverState, Desired, Target
@@ -29,8 +30,8 @@ NIGHT = Profile(
 )
 
 
-def local(y, m, d, hh, mm):
-    return datetime(y, m, d, hh, mm, tzinfo=dt_util.get_default_time_zone())
+def local(y, m, d, hh, mm, ss=0):
+    return datetime(y, m, d, hh, mm, ss, tzinfo=dt_util.get_default_time_zone())
 
 
 async def test_next_event_and_view(hass: HomeAssistant) -> None:
@@ -90,6 +91,66 @@ async def test_arm_fires_and_rearms(hass: HomeAssistant, freezer) -> None:
     await hass.async_block_till_done()
     assert len(fired) == 1 and fired[0][0] == frozenset({"c1"})
     assert tracker.next_event(dt_util.utcnow()).at == local(2026, 7, 11, 7, 0)
+    tracker.async_cancel()
+
+
+async def test_fired_handler_exception_still_rearms(hass: HomeAssistant, freezer, caplog) -> None:
+    calls: list[tuple[frozenset[str], datetime]] = []
+
+    async def flaky_on_fire(covers, at):
+        calls.append((covers, at))
+        if len(calls) == 1:
+            raise RuntimeError("boom")
+
+    freezer.move_to(local(2026, 7, 10, 21, 29))
+    tracker = ScheduleTracker(hass, {"p1": NIGHT}, {"c1": "p1"}, flaky_on_fire, sun=FixedSun())
+    tracker.async_arm(dt_util.utcnow())
+    freezer.move_to(local(2026, 7, 10, 21, 30) + timedelta(seconds=1))
+    with caplog.at_level(logging.ERROR):
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+    assert len(calls) == 1
+    assert "Schedule rule handler failed" in caplog.text
+    assert tracker._unsub is not None  # re-armed despite the handler exception
+
+    # the re-armed timer still fires the next (morning) event normally
+    freezer.move_to(local(2026, 7, 11, 7, 0) + timedelta(seconds=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert len(calls) == 2 and calls[1][0] == frozenset({"c1"})
+    tracker.async_cancel()
+
+
+async def test_fired_only_covers_the_exact_instant(hass: HomeAssistant, freezer) -> None:
+    """Two profiles firing 20s apart must not be batched together (plan decision, fix round 1)."""
+    fired: list[tuple[frozenset[str], datetime]] = []
+
+    async def on_fire(covers, at):
+        fired.append((covers, at))
+
+    profile_a = Profile("pa", "A", (Rule(Target.CLOSED, TimeMode.FIXED, time(21, 30, 0)),))
+    profile_b = Profile("pb", "B", (Rule(Target.CLOSED, TimeMode.FIXED, time(21, 30, 20)),))
+
+    freezer.move_to(local(2026, 7, 10, 21, 29, 50))
+    tracker = ScheduleTracker(
+        hass,
+        {"pa": profile_a, "pb": profile_b},
+        {"ca": "pa", "cb": "pb"},
+        on_fire,
+        sun=FixedSun(),
+    )
+    tracker.async_arm(dt_util.utcnow())
+
+    freezer.move_to(local(2026, 7, 10, 21, 30, 1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert fired == [(frozenset({"ca"}), local(2026, 7, 10, 21, 30, 0))]
+
+    freezer.move_to(local(2026, 7, 10, 21, 30, 21))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert fired[1] == (frozenset({"cb"}), local(2026, 7, 10, 21, 30, 20))
+    assert len(fired) == 2
     tracker.async_cancel()
 
 

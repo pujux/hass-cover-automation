@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, tzinfo
+from datetime import date, datetime, time, tzinfo
 
 from homeassistant.const import SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
@@ -18,9 +18,6 @@ from .engine.model import CoverState, ScheduleView, Target
 from .engine.schedule import Profile, SunTimes, TimeMode
 
 _LOGGER = logging.getLogger(__name__)
-_MATCH_TOLERANCE = timedelta(
-    seconds=30
-)  # rules have minute granularity; HA fires at or after the point in time
 
 
 class HassSunTimes:
@@ -67,6 +64,9 @@ class ScheduleTracker:
         self._on_fire = on_fire
         self.sun: SunTimes = sun or HassSunTimes(hass)
         self._unsub: CALLBACK_TYPE | None = None
+        self._armed_at: datetime | None = None
+        self._armed_covers: frozenset[str] = frozenset()
+        self._generation = 0
 
     @property
     def tz(self) -> tzinfo:
@@ -143,10 +143,18 @@ class ScheduleTracker:
     @callback
     def async_arm(self, now: datetime) -> None:
         self.async_cancel()
-        event = self.next_event(now)
-        if event is None:
+        self._generation += 1
+        events = self._events(now)
+        if not events:
+            self._armed_at = None
+            self._armed_covers = frozenset()
             return
-        self._unsub = async_track_point_in_time(self.hass, self._fired, event.at)
+        at = events[0].at
+        self._armed_at = at
+        self._armed_covers = frozenset(
+            cover for event in events if event.at == at for cover in event.covers
+        )
+        self._unsub = async_track_point_in_time(self.hass, self._fired, at)
 
     @callback
     def async_cancel(self) -> None:
@@ -154,13 +162,16 @@ class ScheduleTracker:
             self._unsub()
             self._unsub = None
 
-    async def _fired(self, at: datetime) -> None:
+    async def _fired(self, _now: datetime) -> None:
         self._unsub = None
-        probe = at - _MATCH_TOLERANCE
-        covers: set[str] = set()
-        for event in self._events(probe):
-            if abs(event.at - at) <= _MATCH_TOLERANCE:
-                covers.update(event.covers)
-        if covers:
-            await self._on_fire(frozenset(covers), at)
-        self.async_arm(at)
+        generation = self._generation
+        at = self._armed_at
+        covers = self._armed_covers
+        try:
+            if covers and at is not None:
+                await self._on_fire(covers, at)
+        except Exception:
+            _LOGGER.exception("Schedule rule handler failed")
+        finally:
+            if generation == self._generation and at is not None:
+                self.async_arm(at)
