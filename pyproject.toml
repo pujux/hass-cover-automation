@@ -30,3 +30,10 @@ strict = ["custom_components/cover_automation/engine"]
 typeCheckingMode = "standard"
 pythonVersion = "3.14"
 reportMissingImports = true
+# HA entity base classes (SwitchEntity.is_on, SelectEntity.current_option/_attr_options, …)
+# declare their attrs as cached_property/instance vars purely as a runtime optimization;
+# overriding them with plain @property or a class-level default in subclasses is the
+# standard, documented HA integration pattern (see e.g. homeassistant/components/*/switch.py)
+# and is safe, so this diagnostic — which otherwise flags every such override — is disabled,
+# matching Home Assistant core's own pyright configuration.
+reportIncompatibleVariableOverride = false
