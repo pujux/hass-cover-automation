@@ -7,7 +7,15 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from custom_components.cover_automation import const
 from custom_components.cover_automation.controller import EVENT_ACTION, CoverAutomationController
-from custom_components.cover_automation.engine.model import CoverPersisted, Owner, Status, Target
+from custom_components.cover_automation.engine.model import (
+    CoverPersisted,
+    Mode,
+    Owner,
+    ReopeningMode,
+    ShadingMode,
+    Status,
+    Target,
+)
 from custom_components.cover_automation.forecast import TodayForecast
 from homeassistant.config_entries import ConfigSubentry
 from homeassistant.core import CoreState, HomeAssistant, ServiceCall
@@ -40,17 +48,18 @@ def _subentry_id(hub_entry, subentry_type: str) -> str:
     )
 
 
-async def start_controller(
+async def build_controller(
     hass: HomeAssistant,
     hub_entry,
     *,
-    forecast=HOT,
     cover_overrides=None,
     persisted=None,
+    store_overrides=None,
     profile=None,
     elevation=40.0,
+    cover_state=("open", 100, 3),
 ):
-    """Set up the hub (2a) with one cover subentry and start a controller on top of it."""
+    """Set up the hub (2a) with one cover subentry and build an unstarted controller on top."""
     overrides = dict(cover_overrides or {})
     if profile is not None:
         hass.config_entries.async_add_subentry(hub_entry, ConfigSubentry(**profile))
@@ -62,7 +71,8 @@ async def start_controller(
     set_weather(hass, condition="sunny", temperature=20.0)
     set_sun(hass, elevation=elevation, azimuth=180.0)
     set_sensor(hass, "sensor.wind", 5.0, unit="km/h", device_class="wind_speed")
-    set_cover(hass, "cover.bedroom", state="open", position=100, features=3)
+    state, position, features = cover_state
+    set_cover(hass, "cover.bedroom", state=state, position=position, features=features)
     # These tests drive a controller of their own, so keep the entry's controller parked:
     # `async_at_started` only runs its job once Home Assistant has finished starting.
     hass.set_state(CoreState.starting)
@@ -71,6 +81,8 @@ async def start_controller(
     data = hub_entry.runtime_data
     if persisted is not None:
         data.store.data.covers[sub_id] = persisted
+    for field, value in (store_overrides or {}).items():
+        setattr(data.store.data, field, value)
     controller = CoverAutomationController(
         hass,
         hub_entry,
@@ -80,6 +92,12 @@ async def start_controller(
         store=data.store,
         hub_device_id=data.hub_device_id,
     )
+    return controller, sub_id
+
+
+async def start_controller(hass: HomeAssistant, hub_entry, *, forecast=HOT, **kwargs):
+    """`build_controller` plus a first evaluation with the forecast patched."""
+    controller, sub_id = await build_controller(hass, hub_entry, **kwargs)
     with patch(
         "custom_components.cover_automation.controller.async_fetch_today",
         AsyncMock(return_value=forecast),
@@ -588,3 +606,50 @@ async def test_retry_deadline_is_dropped_once_the_disagreement_resolves(hass, hu
         assert controller._cover_timers == {}
     finally:
         await controller.async_stop()
+
+
+async def test_write_api_works_before_the_controller_starts(
+    hass, hub_entry, cover_services, hass_storage
+):
+    """F2: the platforms are up before `async_at_started`, so the setters must not need engines."""
+    controller, sub_id = await build_controller(hass, hub_entry)
+    await controller.async_set_enabled(sub_id, False)
+    await controller.async_set_mode(sub_id, Mode.DARK_ONLY)
+    await controller.async_reset_override(sub_id)  # needs the live actual: a no-op before start
+    stored = hass_storage[const.storage_key(hub_entry.entry_id)]["data"]["covers"][sub_id]
+    assert stored["enabled"] is False and stored["mode"] == "dark_only"
+    assert controller.cover_views[sub_id].enabled is False  # the seeded view follows the write
+    with patch(
+        "custom_components.cover_automation.controller.async_fetch_today",
+        AsyncMock(return_value=HOT),
+    ):
+        await controller.async_start()
+        await hass.async_block_till_done()
+    try:
+        p = controller.engine(sub_id).p
+        assert p.enabled is False and p.mode is Mode.DARK_ONLY
+        assert not cover_services["close"]
+    finally:
+        await controller.async_stop()
+
+
+async def test_views_are_seeded_from_the_store_before_start(hass, hub_entry, cover_services):
+    """F3: entities must publish persisted state, not dataclass defaults, until the first run."""
+    controller, sub_id = await build_controller(
+        hass,
+        hub_entry,
+        persisted=CoverPersisted(enabled=False, mode=Mode.PROTECTION_ONLY),
+        store_overrides={
+            "shading_mode": ShadingMode.OFF,
+            "reopening_mode": ReopeningMode.ACTIVE,
+            "simulation": True,
+            "verbose": True,
+        },
+        cover_state=("closed", 0, 3),
+    )
+    view = controller.cover_views[sub_id]
+    assert view.enabled is False and view.mode is Mode.PROTECTION_ONLY
+    assert view.status is Status.DISABLED and view.actual_state == "closed"
+    hub = controller.hub_view
+    assert hub.shading_mode is ShadingMode.OFF and hub.reopening_mode is ReopeningMode.ACTIVE
+    assert hub.simulation is True and hub.verbose is True

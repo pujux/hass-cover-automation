@@ -136,15 +136,40 @@ class CoverAutomationController:
         # One lock per cover: an evaluation (and its blocking service call) only ever
         # serialises that cover, so a slow device cannot stall the others or `async_stop`.
         self._locks: dict[str, asyncio.Lock] = {cid: asyncio.Lock() for cid in covers}
-        self.hub_view = HubView()
+        # Entities are added before `async_at_started` runs the start job, so both views are
+        # seeded from the Store here: publishing dataclass defaults would show a disabled
+        # cover's switch on (and simulation off) after every restart until the first run.
+        self.hub_view = HubView(
+            shading_mode=store.data.shading_mode,
+            reopening_mode=store.data.reopening_mode,
+            simulation=store.data.simulation,
+            verbose=store.data.verbose,
+        )
         # `cover_views` is the read-only face of `_cover_views` (same object): the entity-side
         # `ControllerProtocol` types it as an invariant `Mapping`, so the writable alias is
         # what the evaluation loop mutates.
         self._cover_views: dict[str, CoverView] = {
-            cid: CoverView(name=cfg.name, cover_entity=bind.cover_entity)
-            for cid, (cfg, bind) in covers.items()
+            cid: self._seed_cover_view(cid) for cid in covers
         }
         self.cover_views: Mapping[str, CoverView] = self._cover_views
+
+    def _persisted(self, cover_id: str) -> CoverPersisted:
+        """The Store record for a cover -- the very object `async_start` builds its engine on."""
+        return self._store.data.covers.setdefault(cover_id, CoverPersisted())
+
+    def _seed_cover_view(self, cover_id: str) -> CoverView:
+        """A cover's view before its engine exists: persisted settings plus the live state."""
+        cfg, bind = self._covers[cover_id]
+        p = self._persisted(cover_id)
+        actual = classify_state(self.hass.states.get(bind.cover_entity), self.hub.tolerance)
+        return CoverView(
+            name=cfg.name,
+            cover_entity=bind.cover_entity,
+            status=Status.IDLE if p.enabled else Status.DISABLED,
+            actual_state=actual.value,
+            enabled=p.enabled,
+            mode=p.mode,
+        )
 
     # -- lifecycle ---------------------------------------------------------------------
 
@@ -158,7 +183,7 @@ class CoverAutomationController:
             return
         now = dt_util.utcnow()
         for cover_id, (cfg, bind) in self._covers.items():
-            persisted = self._store.data.covers.setdefault(cover_id, CoverPersisted())
+            persisted = self._persisted(cover_id)
             self._engines[cover_id] = CoverEngine(
                 cfg, persisted, override_dwell_s=self.hub.override_dwell_s
             )
@@ -797,32 +822,47 @@ class CoverAutomationController:
     def _apply_verbose(self, on: bool) -> None:
         _INTEGRATION_LOGGER.setLevel(logging.DEBUG if on else logging.NOTSET)
 
+    async def _async_after_write(self, cover_ids: set[str] | None = None) -> None:
+        """Evaluate, or -- before `async_start` -- just re-seed the views the entities read.
+
+        Every setter is reachable from an entity or service call as soon as the platforms are
+        up, which is well before `async_at_started` fires the start job (and again on a reload
+        while the first forecast fetch is in flight).
+        """
+        if self.started:
+            await self.async_evaluate(cover_ids=cover_ids)
+            return
+        for cover_id in cover_ids if cover_ids is not None else list(self._cover_views):
+            self._cover_views[cover_id] = self._seed_cover_view(cover_id)
+        self._publish()
+
     async def async_set_enabled(self, cover_id: str, enabled: bool) -> None:
         async with self._locks[cover_id]:
-            self._engines[cover_id].p.enabled = enabled
+            # The engine's `p` *is* this record, so one write serves both sides of the start.
+            self._persisted(cover_id).enabled = enabled
         await self._store.async_save()
-        await self.async_evaluate(cover_ids={cover_id})
+        await self._async_after_write({cover_id})
 
     async def async_set_mode(self, cover_id: str, mode: Mode) -> None:
         async with self._locks[cover_id]:
-            self._engines[cover_id].p.mode = mode
+            self._persisted(cover_id).mode = mode
         await self._store.async_save()
-        await self.async_evaluate(cover_ids={cover_id})
+        await self._async_after_write({cover_id})
 
     async def async_set_shading_mode(self, mode: ShadingMode) -> None:
         self._store.data.shading_mode = mode
         await self._store.async_save()
-        await self.async_evaluate()
+        await self._async_after_write()
 
     async def async_set_reopening_mode(self, mode: ReopeningMode) -> None:
         self._store.data.reopening_mode = mode
         await self._store.async_save()
-        await self.async_evaluate()
+        await self._async_after_write()
 
     async def async_set_simulation(self, on: bool) -> None:
         self._store.data.simulation = on
         await self._store.async_save()
-        await self.async_evaluate()
+        await self._async_after_write()
 
     async def async_set_verbose(self, on: bool) -> None:
         self._store.data.verbose = on
@@ -831,6 +871,15 @@ class CoverAutomationController:
         self._publish()
 
     async def async_reset_override(self, cover_id: str) -> None:
+        if not self.started:
+            # A reset hands ownership back to the engine *at the cover's current state*, so it
+            # needs the live actual and the engine that records it. The override is persisted
+            # and the user can reset again once the controller is running.
+            _LOGGER.debug(
+                "%s: override reset ignored, the controller has not started yet",
+                self.cover_names[cover_id],
+            )
+            return
         now = dt_util.utcnow()
         async with self._locks[cover_id]:
             actual = await self._sync_actual(cover_id, now)
