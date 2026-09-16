@@ -23,7 +23,9 @@ async def test_integration_is_discoverable(hass: HomeAssistant) -> None:
 
 def test_manifest_keys() -> None:
     data = json.loads(MANIFEST.read_text())
-    assert list(data) == sorted(data), "hassfest requires alphabetically sorted keys"
+    assert list(data)[:2] == ["domain", "name"], "hassfest: domain and name first"
+    rest = list(data)[2:]
+    assert rest == sorted(rest), "hassfest: remaining manifest keys alphabetical"
     assert data["domain"] == const.DOMAIN
     assert data["version"] == "0.1.0"
     repo = "https://github.com/pujux/hass-cover-automation"

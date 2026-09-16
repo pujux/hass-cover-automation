@@ -5,8 +5,6 @@ reset_override:
       domain:
         - sensor
         - binary_sensor
-    device:
-      integration: cover_automation
 evaluate_now:
   target:
     entity:
@@ -14,5 +12,3 @@ evaluate_now:
       domain:
         - sensor
         - binary_sensor
-    device:
-      integration: cover_automation
