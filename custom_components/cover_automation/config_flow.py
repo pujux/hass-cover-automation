@@ -332,6 +332,7 @@ def cover_schema(
     d = defaults
     hub_has_wind = bool(entry.data.get(const.CONF_WIND_SENSOR))
     profiles = entry.get_subentries_of_type(const.SUBENTRY_PROFILE)
+    profile_ids = {p.subentry_id for p in profiles}
     profile_options: list[selector.SelectOptionDict] = [
         {"value": const.PROFILE_NONE, "label": "—"},
         *({"value": p.subentry_id, "label": p.title} for p in profiles),
@@ -414,11 +415,16 @@ def cover_schema(
                 ): _select(_WIND_ACTIONS, "wind_action"),
             }
         )
+    stored_profile = dflt(const.CONF_SCHEDULE_PROFILE, const.PROFILE_NONE)
+    if stored_profile != const.PROFILE_NONE and stored_profile not in profile_ids:
+        # The stored profile subentry was deleted; fall back to "none" so the selector
+        # always has a valid, selectable default (spec §3).
+        stored_profile = const.PROFILE_NONE
     fields.update(
         {
             vol.Required(
                 const.CONF_SCHEDULE_PROFILE,
-                default=dflt(const.CONF_SCHEDULE_PROFILE, const.PROFILE_NONE),
+                default=stored_profile,
             ): selector.SelectSelector(
                 {"options": profile_options, "mode": selector.SelectSelectorMode.DROPDOWN}
             ),
@@ -663,15 +669,18 @@ class ProfileSubentryFlow(ConfigSubentryFlow):
         placeholders: dict[str, str] = {"problems": ""}
         if user_input is not None:
             data = profile_data_from_form(user_input)
-            problems = validate_profile(data)
-            if problems:
-                errors["base"] = "invalid_rules"
-                placeholders["problems"] = "; ".join(problems)
+            if not data[const.CONF_NAME]:
+                errors[const.CONF_NAME] = "name_required"
             else:
-                title = data[const.CONF_NAME]
-                if current is not None:
-                    return self.async_update_and_abort(entry, current, title=title, data=data)
-                return self.async_create_entry(title=title, data=data)
+                problems = validate_profile(data)
+                if problems:
+                    errors["base"] = "invalid_rules"
+                    placeholders["problems"] = "; ".join(problems)
+                else:
+                    title = data[const.CONF_NAME]
+                    if current is not None:
+                        return self.async_update_and_abort(entry, current, title=title, data=data)
+                    return self.async_create_entry(title=title, data=data)
         form = user_input or form_from_profile_data(current.data if current else {})
         return self.async_show_form(
             step_id="reconfigure" if reconfigure else "user",

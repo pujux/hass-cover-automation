@@ -145,7 +145,8 @@
       },
       "entry_type": "Schedule profile",
       "error": {
-        "invalid_rules": "The rules are not valid: {problems}"
+        "invalid_rules": "The rules are not valid: {problems}",
+        "name_required": "A name is required."
       },
       "initiate_flow": {
         "user": "Add schedule profile"
@@ -275,6 +276,14 @@
     }
   },
   "issues": {
+    "broken_cover_config": {
+      "description": "Cover {cover} could not be loaded: {error}. Fix its configuration; the cover is skipped until then.",
+      "title": "Cover configuration is invalid"
+    },
+    "broken_profile_config": {
+      "description": "Schedule profile {profile} could not be loaded: {error}. Fix its configuration; the profile is skipped until then.",
+      "title": "Schedule profile configuration is invalid"
+    },
     "missing_entity": {
       "description": "The entity {entity_id} referenced by Cover Automation does not exist. Fix the configuration or restore the entity.",
       "title": "Configured entity is missing"

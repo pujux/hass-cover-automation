@@ -12,7 +12,7 @@ from functools import partial
 from homeassistant.components.weather.const import WeatherEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.start import async_at_started
@@ -26,6 +26,8 @@ from .store import CoverAutomationStore
 _LOGGER = logging.getLogger(__name__)
 SUN_ENTITY = "sun.sun"
 _PROFILE_ISSUE_PREFIX = "missing_profile_"
+_BROKEN_COVER_ISSUE_PREFIX = "broken_cover_config_"
+_BROKEN_PROFILE_ISSUE_PREFIX = "broken_profile_config_"
 
 
 @dataclass(slots=True)
@@ -47,6 +49,14 @@ def _missing_entity_issue_id(entry: ConfigEntry, entity_id: str) -> str:
 
 def _missing_profile_issue_id(subentry_id: str) -> str:
     return f"{_PROFILE_ISSUE_PREFIX}{subentry_id}"
+
+
+def _broken_cover_config_issue_id(subentry_id: str) -> str:
+    return f"{_BROKEN_COVER_ISSUE_PREFIX}{subentry_id}"
+
+
+def _broken_profile_config_issue_id(subentry_id: str) -> str:
+    return f"{_BROKEN_PROFILE_ISSUE_PREFIX}{subentry_id}"
 
 
 def _validate_required_entities(hass: HomeAssistant, hub: HubConfig) -> None:
@@ -82,11 +92,19 @@ def _optional_entity_ids(
 
 
 def _entry_issue_ids(entry: ConfigEntry, wanted_entities: Iterable[str]) -> set[str]:
-    """Issue ids this entry currently owns: still-configured entities and cover subentries."""
+    """Issue ids this entry currently owns: still-configured entities and subentries."""
     ids = {_missing_entity_issue_id(entry, e) for e in wanted_entities}
     ids.update(
         _missing_profile_issue_id(s.subentry_id)
         for s in entry.get_subentries_of_type(const.SUBENTRY_COVER)
+    )
+    ids.update(
+        _broken_cover_config_issue_id(s.subentry_id)
+        for s in entry.get_subentries_of_type(const.SUBENTRY_COVER)
+    )
+    ids.update(
+        _broken_profile_config_issue_id(s.subentry_id)
+        for s in entry.get_subentries_of_type(const.SUBENTRY_PROFILE)
     )
     return ids
 
@@ -96,13 +114,14 @@ def _delete_stale_issues(
 ) -> None:
     """Delete issues HA never clears on its own: ones whose reference has disappeared.
 
-    `missing_entity_*` and `missing_profile_*` issues are only ever created or cleared for
+    `missing_entity_*`, `missing_profile_*`, `broken_cover_config_*` and
+    `broken_profile_config_*` issues are only ever created or cleared for
     entities/subentries that are still configured (see `_async_check_optional_entities` and
     `async_setup_entry`). Once a reference disappears -- the wind sensor is cleared, a cover
     subentry is deleted, or the whole entry is removed (call with `owned_issue_ids=set()`) --
     nothing else deletes its issue, so it would otherwise linger in Repairs forever. Matching
-    `missing_profile_*` issues by a bare prefix (not scoped to this entry's current subentries)
-    is safe because the integration is `single_config_entry`: only one hub entry ever exists.
+    these by a bare prefix (not scoped to this entry's current subentries) is safe because the
+    integration is `single_config_entry`: only one hub entry ever exists.
     """
     registry = ir.async_get(hass)
     entity_prefix = f"missing_entity_{entry.entry_id}_"
@@ -111,7 +130,12 @@ def _delete_stale_issues(
         for domain, issue_id in registry.issues
         if domain == const.DOMAIN
         and issue_id not in owned_issue_ids
-        and (issue_id.startswith(entity_prefix) or issue_id.startswith(_PROFILE_ISSUE_PREFIX))
+        and (
+            issue_id.startswith(entity_prefix)
+            or issue_id.startswith(_PROFILE_ISSUE_PREFIX)
+            or issue_id.startswith(_BROKEN_COVER_ISSUE_PREFIX)
+            or issue_id.startswith(_BROKEN_PROFILE_ISSUE_PREFIX)
+        )
     ]
     for issue_id in stale:
         ir.async_delete_issue(hass, const.DOMAIN, issue_id)
@@ -144,6 +168,9 @@ async def _async_check_optional_entities(
             )
         else:
             ir.async_delete_issue(hass, const.DOMAIN, issue_id)
+    if getattr(entry, "runtime_data", None) is None:
+        # The entry was unloaded/removed while this deferred check was pending.
+        return
     entry.runtime_data.missing_entities = missing
 
 
@@ -177,15 +204,57 @@ def ensure_devices(hass: HomeAssistant, entry: ConfigEntry) -> str:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: CoverAutomationConfigEntry) -> bool:
-    hub = hub_config(entry)
+    try:
+        hub = hub_config(entry)
+    except KeyError as err:
+        msg = f"Cover Automation hub is missing required configuration: {err}"
+        raise ConfigEntryError(msg) from err
     _validate_required_entities(hass, hub)
 
-    profiles = {
-        s.subentry_id: profile(s) for s in entry.get_subentries_of_type(const.SUBENTRY_PROFILE)
-    }
+    profiles: dict[str, Profile] = {}
+    for subentry in entry.get_subentries_of_type(const.SUBENTRY_PROFILE):
+        profile_issue_id = _broken_profile_config_issue_id(subentry.subentry_id)
+        try:
+            profiles[subentry.subentry_id] = profile(subentry)
+        except (ValueError, KeyError, TypeError) as err:
+            _LOGGER.warning(
+                "Schedule profile %s is misconfigured and will be skipped: %s",
+                subentry.title,
+                err,
+            )
+            ir.async_create_issue(
+                hass,
+                const.DOMAIN,
+                profile_issue_id,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="broken_profile_config",
+                translation_placeholders={"profile": subentry.title, "error": str(err)},
+            )
+        else:
+            ir.async_delete_issue(hass, const.DOMAIN, profile_issue_id)
+
     covers: dict[str, tuple[CoverConfig, CoverBindings]] = {}
     for subentry in entry.get_subentries_of_type(const.SUBENTRY_COVER):
-        cfg, bind = cover_config(subentry, hub)
+        broken_issue_id = _broken_cover_config_issue_id(subentry.subentry_id)
+        try:
+            cfg, bind = cover_config(subentry, hub)
+        except (ValueError, KeyError, TypeError) as err:
+            _LOGGER.warning(
+                "Cover %s is misconfigured and will be skipped: %s", subentry.title, err
+            )
+            ir.async_create_issue(
+                hass,
+                const.DOMAIN,
+                broken_issue_id,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="broken_cover_config",
+                translation_placeholders={"cover": subentry.title, "error": str(err)},
+            )
+            continue
+        ir.async_delete_issue(hass, const.DOMAIN, broken_issue_id)
+
         issue_id = _missing_profile_issue_id(subentry.subentry_id)
         if cfg.profile_id is not None and cfg.profile_id not in profiles:
             _LOGGER.warning(
