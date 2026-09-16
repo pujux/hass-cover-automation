@@ -28,6 +28,11 @@ def temperature_unit_of(state: State | None) -> str | None:
     return str(unit) if unit else None
 
 
+# `temperature_unit_of` reads the generic `unit_of_measurement` attribute; it is unit-agnostic
+# despite the name. This alias is the clearer spelling for non-temperature sensors (e.g. wind).
+unit_of = temperature_unit_of
+
+
 def to_celsius(value: float, unit: str | None) -> float:
     if unit in (None, UnitOfTemperature.CELSIUS) or unit not in TemperatureConverter.VALID_UNITS:
         return value
