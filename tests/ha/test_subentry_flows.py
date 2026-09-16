@@ -468,3 +468,43 @@ async def test_profile_reconfigure_prefills_and_updates(hass: HomeAssistant, hub
         and updated.data[const.CONF_RULES][0][const.CONF_RULE_TIME_MODE] == "sunset"
     )
     assert const.CONF_QUIET_START not in updated.data  # cleared quiet hours are dropped
+
+
+async def test_profile_reconfigure_prefills_rules_and_quiet_hours(
+    hass: HomeAssistant, hub_entry
+) -> None:
+    hass.config_entries.async_add_subentry(
+        hub_entry, config_entries.ConfigSubentry(**profile_subentry_data("Night"))
+    )
+    sub = next(iter(hub_entry.subentries.values()))
+    result = await hass.config_entries.subentries.async_init(
+        (hub_entry.entry_id, const.SUBENTRY_PROFILE),
+        context={"source": config_entries.SOURCE_RECONFIGURE, "subentry_id": sub.subentry_id},
+    )
+    schema = result["data_schema"].schema
+    suggested = {
+        str(k): k.description.get("suggested_value")
+        for k in schema
+        if getattr(k, "description", None)
+    }
+    assert (
+        suggested[const.CONF_QUIET_START] == "22:00:00"
+        and suggested[const.CONF_QUIET_END] == "07:00:00"
+    )
+    rule_1 = next(v for k, v in schema.items() if str(k) == "rule_1")
+    inner = {str(k): k for k in rule_1.schema.schema}
+    assert inner[const.CONF_RULE_ENABLED].default() is True
+    assert inner[const.CONF_RULE_TIME].description["suggested_value"] == "21:30:00"
+    rule_2 = next(v for k, v in schema.items() if str(k) == "rule_2")
+    assert {str(k): k for k in rule_2.schema.schema}[const.CONF_RULE_ENABLED].default() is False
+
+
+async def test_cover_elevation_min_must_be_below_max(hass: HomeAssistant, hub_entry) -> None:
+    set_weather(hass)
+    set_cover(hass, "cover.bedroom")
+    result = await start(hass, hub_entry, const.SUBENTRY_COVER)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {**COVER_INPUT, const.CONF_ELEVATION_MIN: 50, const.CONF_ELEVATION_MAX: 40},
+    )
+    assert result["errors"] == {const.CONF_ELEVATION_MIN: "elevation_min_not_below_max"}

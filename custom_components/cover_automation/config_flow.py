@@ -17,7 +17,7 @@ from homeassistant.config_entries import (
     OptionsFlow,
     SubentryFlowResult,
 )
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import section
 from homeassistant.helpers import selector
@@ -123,7 +123,7 @@ def thresholds_schema(defaults: Mapping[str, Any], temperature_unit: str) -> vol
             ): _temperature(-30, 60, temperature_unit),
             vol.Required(
                 const.CONF_SUNNY_CONDITIONS,
-                default=dflt(const.CONF_SUNNY_CONDITIONS, const.DEFAULT_SUNNY_CONDITIONS),
+                default=dflt(const.CONF_SUNNY_CONDITIONS, list(const.DEFAULT_SUNNY_CONDITIONS)),
             ): selector.SelectSelector(
                 {
                     "options": const.WEATHER_CONDITIONS,
@@ -348,9 +348,9 @@ def cover_schema(
         vol.Optional(
             const.CONF_NAME, description={"suggested_value": d.get(const.CONF_NAME)}
         ): selector.TextSelector(),
-        vol.Required(const.CONF_AZIMUTH, default=dflt(const.CONF_AZIMUTH, 180)): _number(
-            0, 359, 1, "°"
-        ),
+        vol.Required(
+            const.CONF_AZIMUTH, default=dflt(const.CONF_AZIMUTH, const.DEFAULT_AZIMUTH)
+        ): _number(0, 359, 1, "°"),
         vol.Required(
             const.CONF_TOLERANCE_LEFT,
             default=dflt(const.CONF_TOLERANCE_LEFT, const.DEFAULT_TOLERANCE_LEFT),
@@ -400,10 +400,12 @@ def cover_schema(
                     const.CONF_WIND_ENABLED, default=dflt(const.CONF_WIND_ENABLED, False)
                 ): selector.BooleanSelector(),
                 vol.Required(
-                    const.CONF_WIND_UPPER, default=dflt(const.CONF_WIND_UPPER, 60)
+                    const.CONF_WIND_UPPER,
+                    default=dflt(const.CONF_WIND_UPPER, const.DEFAULT_WIND_UPPER_KMH),
                 ): _number(0, 300, 1, wind_unit or None),
                 vol.Required(
-                    const.CONF_WIND_LOWER, default=dflt(const.CONF_WIND_LOWER, 50)
+                    const.CONF_WIND_LOWER,
+                    default=dflt(const.CONF_WIND_LOWER, const.DEFAULT_WIND_LOWER_KMH),
                 ): _number(0, 300, 1, wind_unit or None),
                 vol.Required(
                     const.CONF_WIND_HOLD,
@@ -458,7 +460,7 @@ def validate_cover_input(
     state = hass.states.get(cover_entity)
     if (
         state is not None
-        and state.state not in ("unavailable", "unknown")
+        and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
         and const.CONF_COVER_ENTITY not in errors
     ):
         features = int(state.attributes.get("supported_features", 0) or 0)
@@ -477,6 +479,8 @@ def validate_cover_input(
         errors[const.CONF_ROOM_SENSOR] = "room_sensor_required"
     if int(data[const.CONF_CONFIRM_WINDOW]) < const.MIN_CONFIRM_WINDOW_S:
         errors[const.CONF_CONFIRM_WINDOW] = "confirm_window_too_short"
+    if float(data[const.CONF_ELEVATION_MIN]) >= float(data[const.CONF_ELEVATION_MAX]):
+        errors[const.CONF_ELEVATION_MIN] = "elevation_min_not_below_max"
     return errors
 
 

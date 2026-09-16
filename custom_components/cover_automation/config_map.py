@@ -49,9 +49,14 @@ class CoverBindings:
     wind_unit: str | None
 
 
-def _opt_str(data: Mapping[str, Any], key: str) -> str | None:
+def _opt_str(data: Mapping[str, Any], key: str, *, none_sentinel: bool = False) -> str | None:
+    """Read an optional string field; `none_sentinel` also treats `const.PROFILE_NONE` as unset.
+
+    Only the schedule-profile field uses the "none" sentinel value; every other optional
+    field (entity ids, units) is unset by being absent or empty, never by the literal string.
+    """
     value = data.get(key)
-    if value in (None, "", const.PROFILE_NONE):
+    if value in (None, "") or (none_sentinel and value == const.PROFILE_NONE):
         return None
     return str(value)
 
@@ -103,6 +108,7 @@ def hub_config(entry: ConfigEntry) -> HubConfig:
         override_dwell_s=_minutes(
             opts, const.CONF_OVERRIDE_DWELL, const.DEFAULT_OVERRIDE_DWELL_MIN
         ),
+        # hand-written entries only; flows always stamp the unit
         temperature_unit=str(opts.get(const.CONF_TEMPERATURE_UNIT, UnitOfTemperature.CELSIUS)),
     )
 
@@ -111,7 +117,7 @@ def cover_config(subentry: ConfigSubentry, hub: HubConfig) -> tuple[CoverConfig,
     d = subentry.data
     room_sensor = _opt_str(d, const.CONF_ROOM_SENSOR)
     door_sensor = _opt_str(d, const.CONF_DOOR_SENSOR)
-    profile_id = _opt_str(d, const.CONF_SCHEDULE_PROFILE)
+    profile_id = _opt_str(d, const.CONF_SCHEDULE_PROFILE, none_sentinel=True)
     wind_enabled = bool(d.get(const.CONF_WIND_ENABLED, False)) and hub.wind_sensor is not None
     name = str(d.get(const.CONF_NAME) or subentry.title)
     cfg = CoverConfig(

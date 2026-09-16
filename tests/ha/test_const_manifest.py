@@ -30,7 +30,8 @@ def test_manifest_keys() -> None:
 
 def test_defaults_match_spec() -> None:
     assert const.DEFAULT_FROST_THRESHOLD == 0.0
-    assert const.DEFAULT_SUNNY_CONDITIONS == ["sunny", "partlycloudy"]
+    assert const.DEFAULT_SUNNY_CONDITIONS == ("sunny", "partlycloudy")
+    assert isinstance(const.DEFAULT_SUNNY_CONDITIONS, tuple)
     assert (const.DEFAULT_SUNNY_ON_DELAY_MIN, const.DEFAULT_SUNNY_OFF_DELAY_MIN) == (10, 20)
     assert const.DEFAULT_WEATHER_GRACE_MIN == 30
     assert (const.DEFAULT_HOT_HIGH, const.DEFAULT_HOT_LOW) == (24.0, 13.0)

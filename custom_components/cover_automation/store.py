@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -86,11 +87,32 @@ class StoreData:
         )
 
 
+class _CoverAutomationHAStore(Store[dict[str, Any]]):
+    """`Store` subclass with an explicit migration policy.
+
+    Minor-version bumps never change the on-disk shape (new fields are simply optional in
+    `StoreData.from_dict`), so they pass the raw data through unchanged. A major-version bump
+    would mean an actual schema change; since none is implemented yet, it fails loudly instead
+    of silently discarding data.
+    """
+
+    async def _async_migrate_func(
+        self, old_major_version: int, old_minor_version: int, old_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        if old_major_version != const.STORAGE_VERSION:
+            msg = (
+                f"cannot migrate {const.DOMAIN} store from major version {old_major_version} "
+                f"to {const.STORAGE_VERSION}"
+            )
+            raise NotImplementedError(msg)
+        return old_data
+
+
 class CoverAutomationStore:
     """One HA Store per hub entry; the engine owns the state, entities are views (decision 17)."""
 
     def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
-        self._store: Store[dict[str, Any]] = Store(
+        self._store: Store[dict[str, Any]] = _CoverAutomationHAStore(
             hass,
             const.STORAGE_VERSION,
             const.storage_key(entry_id),
@@ -109,6 +131,12 @@ class CoverAutomationStore:
         raw = await self._store.async_load()
         self._data = StoreData.from_dict(raw)
         return self._data
+
+    def prune(self, keep: Iterable[str]) -> None:
+        """Drop persisted cover records whose subentry no longer exists."""
+        keep_set = set(keep)
+        for cover_id in [c for c in self.data.covers if c not in keep_set]:
+            del self.data.covers[cover_id]
 
     def _to_save(self) -> dict[str, Any]:
         return self.data.to_dict()
