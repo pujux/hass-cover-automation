@@ -11,6 +11,8 @@ from custom_components.cover_automation.config_flow import (
     profile_schema,
     thresholds_schema,
 )
+from custom_components.cover_automation.engine.model import ShadingRule, Target, WindAction
+from custom_components.cover_automation.engine.schedule import TimeMode
 
 TRANSLATIONS = json.loads(
     Path("custom_components/cover_automation/translations/en.json").read_text()
@@ -51,6 +53,7 @@ def test_flow_errors_and_aborts_are_translated() -> None:
         block = TRANSLATIONS["config_subentries"][kind]
         assert block["entry_type"] and block["initiate_flow"]["user"]
         assert set(block["step"]) >= {"user", "reconfigure"}
+        assert "reconfigure_successful" in block["abort"]
 
 
 def test_cover_subentry_fields_are_translated(hass, hub_entry) -> None:
@@ -82,10 +85,10 @@ def test_profile_subentry_fields_and_sections_are_translated() -> None:
 def test_selector_options_and_issues_are_translated() -> None:
     sel = TRANSLATIONS["selector"]
     assert set(sel["weather_condition"]["options"]) == set(const.WEATHER_CONDITIONS)
-    assert set(sel["shading_rule"]["options"]) == {"forecast_with_room", "room_only", "either"}
-    assert set(sel["time_mode"]["options"]) == {"fixed", "sunrise", "sunset"}
-    assert set(sel["wind_action"]["options"]) == {"open", "hold"}
-    assert set(sel["rule_action"]["options"]) == {"closed", "open"}
+    assert set(sel["shading_rule"]["options"]) == {r.value for r in ShadingRule}
+    assert set(sel["time_mode"]["options"]) == {m.value for m in TimeMode}
+    assert set(sel["wind_action"]["options"]) == {a.value for a in WindAction}
+    assert set(sel["rule_action"]["options"]) == {t.value for t in Target}
     assert {"missing_entity", "missing_profile"} <= set(TRANSLATIONS["issues"])
 
 
