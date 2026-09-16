@@ -14,33 +14,6 @@ WEATHER = "weather.home"
 SUN = "sun.sun"
 
 
-@pytest.fixture(autouse=True)
-def _skip_logbook_dependency_setup(hass: HomeAssistant) -> None:
-    """Pretend `logbook` is already loaded.
-
-    The manifest lists `logbook` as a hard dependency, which in turn hard-depends on
-    `frontend` (needing the `home-assistant-frontend` PyPI package, not part of this
-    test environment) and `recorder` (needing dedicated fixtures to initialize). Real
-    setup of those is irrelevant to these unit tests, so we short-circuit it: HA's
-    dependency resolver skips a dependency already present in `hass.config.components`.
-    """
-    hass.config.components.add("logbook")
-
-
-@pytest.fixture(autouse=True)
-def expected_lingering_timers() -> bool:
-    """Allow the `sun` hub dependency's polling timer to outlive a test.
-
-    Starting the hub config/options/reconfigure flow sets up the `sun` domain (a
-    manifest dependency), whose `binary_sensor`/`sensor` platforms schedule a real
-    polling timer that is not cancelled before the test ends. This is inherent to
-    exercising the real flow manager against the real dependency graph, not a leak
-    in our own code, so we use the harness' documented escape hatch instead of
-    failing every flow test on it.
-    """
-    return True
-
-
 def set_weather(
     hass: HomeAssistant,
     entity_id: str = WEATHER,
