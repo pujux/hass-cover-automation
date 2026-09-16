@@ -178,6 +178,18 @@ def test_want_shade_rules():
     assert want_shade(either, inp(room_cold=True), sig(hot_day=True)) is True  # no comfort floor
 
 
+def test_room_only_with_a_degraded_sensor_is_unknown():
+    """I3: `room_only` has no second input; a dead room sensor must not read as 'not hot'."""
+    room_only = cfg(shading_rule=ShadingRule.ROOM_ONLY, has_room_sensor=True)
+    assert want_shade(room_only, inp(room_degraded=True), sig(hot_day=True)) is None
+    d = evaluate(room_only, CoverPersisted(), inp(room_degraded=True), sig())
+    assert d.desired is Desired.LEAVE_ALONE
+    assert d.layer is Layer.SHADING and d.reason == "shading_unknown"
+    # the same cover with a healthy sensor still opens when the room is not hot
+    d2 = evaluate(room_only, CoverPersisted(), inp(), sig())
+    assert d2.desired is Desired.OPEN and d2.reason == "no_shade"
+
+
 def test_forced_modes_bypass_weather_and_room():
     c = cfg(elevation_min=10.0, elevation_max=40.0)
     assert (

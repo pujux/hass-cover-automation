@@ -36,7 +36,9 @@ def want_shade(cfg: CoverConfig, inputs: CoverInputs, s: HubSignals) -> bool | N
     if not s.sunny:
         return False
     if cfg.shading_rule is ShadingRule.ROOM_ONLY:
-        return inputs.room_hot
+        # The room sensor is the only input this rule has: degraded means unknown, not cold
+        # (§1.2 layer 6 -- a needed input that is unknown yields leave_alone, decision 29).
+        return None if inputs.room_degraded else inputs.room_hot
     if cfg.shading_rule is ShadingRule.FORECAST_WITH_ROOM and inputs.room_cold:
         return False
     if inputs.room_hot:
