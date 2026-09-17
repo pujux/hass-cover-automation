@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from custom_components.cover_automation import const
+from custom_components.cover_automation import config_map, const
+from custom_components.cover_automation.engine.schedule import RuleAction
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -262,6 +263,88 @@ async def test_profile_subentry_created_from_rule_sections(hass: HomeAssistant, 
     assert (sub.data[const.CONF_QUIET_START], sub.data[const.CONF_QUIET_END]) == (
         "22:00:00",
         "07:00:00",
+    )
+
+
+async def test_profile_with_a_release_rule_is_stored(hass: HomeAssistant, hub_entry) -> None:
+    """Decision 33: close at sunset+60, hand back to the automation at 08:00."""
+    result = await start(hass, hub_entry, const.SUBENTRY_PROFILE)
+    disabled = {
+        const.CONF_RULE_ENABLED: False,
+        const.CONF_RULE_ACTION: "closed",
+        const.CONF_RULE_TIME_MODE: "fixed",
+        const.CONF_RULE_OFFSET: 0,
+    }
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {
+            const.CONF_NAME: "Bedroom",
+            "rule_1": {
+                const.CONF_RULE_ENABLED: True,
+                const.CONF_RULE_ACTION: "closed",
+                const.CONF_RULE_TIME_MODE: "sunset",
+                const.CONF_RULE_OFFSET: 60,
+            },
+            "rule_2": {
+                const.CONF_RULE_ENABLED: True,
+                const.CONF_RULE_ACTION: "release",
+                const.CONF_RULE_TIME_MODE: "fixed",
+                const.CONF_RULE_TIME: "08:00:00",
+                const.CONF_RULE_OFFSET: 0,
+            },
+            "rule_3": disabled,
+            "rule_4": disabled,
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    sub = next(iter(hub_entry.subentries.values()))
+    assert sub.data[const.CONF_RULES][1][const.CONF_RULE_ACTION] == "release"
+    assert (
+        config_map.profile(
+            config_entries.ConfigSubentry(
+                data=sub.data,
+                subentry_type=const.SUBENTRY_PROFILE,
+                title=sub.title,
+                unique_id=None,
+            )
+        )
+        .rules[1]
+        .action
+        is RuleAction.RELEASE
+    )
+
+
+async def test_profile_with_a_release_rule_but_no_close_rule_is_rejected(
+    hass: HomeAssistant, hub_entry
+) -> None:
+    result = await start(hass, hub_entry, const.SUBENTRY_PROFILE)
+    disabled = {
+        const.CONF_RULE_ENABLED: False,
+        const.CONF_RULE_ACTION: "closed",
+        const.CONF_RULE_TIME_MODE: "fixed",
+        const.CONF_RULE_OFFSET: 0,
+    }
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {
+            const.CONF_NAME: "Lonely",
+            "rule_1": {
+                const.CONF_RULE_ENABLED: True,
+                const.CONF_RULE_ACTION: "release",
+                const.CONF_RULE_TIME_MODE: "fixed",
+                const.CONF_RULE_TIME: "08:00:00",
+                const.CONF_RULE_OFFSET: 0,
+            },
+            "rule_2": disabled,
+            "rule_3": disabled,
+            "rule_4": disabled,
+        },
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "invalid_rules"}
+    assert (
+        "rule 1 (release) has no earlier close rule to release"
+        in result["description_placeholders"]["problems"]
     )
 
 

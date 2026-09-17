@@ -20,10 +20,9 @@ from custom_components.cover_automation.engine.model import (
     ShadingMode,
     ShadingRule,
     Status,
-    Target,
     WindAction,
 )
-from custom_components.cover_automation.engine.schedule import TimeMode
+from custom_components.cover_automation.engine.schedule import RuleAction, TimeMode
 from custom_components.cover_automation.views import CoverView
 
 from tests.ha.fakes import FakeController
@@ -103,7 +102,7 @@ def test_selector_options_and_issues_are_translated() -> None:
     assert set(sel["shading_rule"]["options"]) == {r.value for r in ShadingRule}
     assert set(sel["time_mode"]["options"]) == {m.value for m in TimeMode}
     assert set(sel["wind_action"]["options"]) == {a.value for a in WindAction}
-    assert set(sel["rule_action"]["options"]) == {t.value for t in Target}
+    assert set(sel["rule_action"]["options"]) == {a.value for a in RuleAction}
     assert {"missing_entity", "missing_profile"} <= set(TRANSLATIONS["issues"])
 
 

@@ -25,8 +25,8 @@ from homeassistant.util.unit_conversion import TemperatureConverter
 
 from . import const
 from .config_map import parse_time, quiet_from_data, rules_from_data
-from .engine.model import ShadingRule, Target, WindAction
-from .engine.schedule import Profile, TimeMode
+from .engine.model import ShadingRule, WindAction
+from .engine.schedule import Profile, RuleAction, TimeMode
 from .engine.schedule import validate as validate_rules
 
 
@@ -543,7 +543,7 @@ class CoverSubentryFlow(ConfigSubentryFlow):
 
 _RULE_KEYS = tuple(f"rule_{i}" for i in range(1, const.MAX_RULES + 1))
 _TIME_MODES = [m.value for m in TimeMode]
-_ACTIONS = [Target.CLOSED.value, Target.OPEN.value]
+_ACTIONS = [a.value for a in RuleAction]
 
 
 def _rule_section(defaults: Mapping[str, Any]) -> section:
@@ -556,7 +556,7 @@ def _rule_section(defaults: Mapping[str, Any]) -> section:
                 ): selector.BooleanSelector(),
                 vol.Required(
                     const.CONF_RULE_ACTION,
-                    default=d.get(const.CONF_RULE_ACTION, Target.CLOSED.value),
+                    default=d.get(const.CONF_RULE_ACTION, RuleAction.CLOSED.value),
                 ): _select(_ACTIONS, "rule_action"),
                 vol.Required(
                     const.CONF_RULE_TIME_MODE,

@@ -183,7 +183,7 @@
                 "time": "Time",
                 "time_mode": "Time mode"
               },
-              "description": "A close rule holds until the next rule or a manual move; an open rule opens once.",
+              "description": "A close rule holds until the next rule or a manual move; an open rule opens once. A release rule ends the hold without moving the cover; the automation decides again.",
               "name": "Rule 1"
             },
             "rule_2": {
@@ -245,7 +245,7 @@
                 "time": "Time",
                 "time_mode": "Time mode"
               },
-              "description": "A close rule holds until the next rule or a manual move; an open rule opens once.",
+              "description": "A close rule holds until the next rule or a manual move; an open rule opens once. A release rule ends the hold without moving the cover; the automation decides again.",
               "name": "Rule 1"
             },
             "rule_2": {
@@ -496,7 +496,8 @@
     "rule_action": {
       "options": {
         "closed": "Close",
-        "open": "Open"
+        "open": "Open",
+        "release": "Release to automation"
       }
     },
     "shading_rule": {
