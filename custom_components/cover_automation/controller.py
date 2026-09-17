@@ -130,7 +130,6 @@ class CoverAutomationController:
         self._actual: dict[str, CoverState] = {}
         self._reconciled: set[str] = set()
         self._retry_at: dict[str, datetime] = {}
-        self._last_engine_move: dict[str, datetime] = {}
         self._cover_timers: dict[str, CALLBACK_TYPE] = {}
         self._unsubs: list[CALLBACK_TYPE] = []
         self._last_forecast_fetch: datetime | None = None
@@ -541,7 +540,6 @@ class CoverAutomationController:
             await self._store.async_save()
             return
         self._retry_at.pop(cover_id, None)
-        self._last_engine_move[cover_id] = now
         self._fire_action_event(cover_id, verb, decision, simulated=False)
 
     def _update_frost_conflict(self, cover_id: str, result: StepResult) -> None:
@@ -810,7 +808,7 @@ class CoverAutomationController:
             active_rule=self._schedule.active_rule_label(cover_id, now),
             next_planned_action=planned,
             next_planned_at=planned_at,
-            last_engine_move=self._last_engine_move.get(cover_id),
+            last_engine_move=p.last_send_at,
             owner=p.owner.value if p.owner else None,
             degraded=inputs.room_degraded,
             enabled=p.enabled,

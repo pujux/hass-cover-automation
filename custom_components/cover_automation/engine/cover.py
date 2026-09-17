@@ -55,9 +55,12 @@ class CoverEngine:
         else:
             # §5 persists wind_active so a wind episode survives a restart: without the seed
             # a release during downtime is never detected and no restoring window opens.
+            # §5 also persists the min-interval clock (decision 32), so the shading damping
+            # survives the reload that every hub option edit triggers.
             self.rt = CoverRuntime(
                 override_dwell=ContinuousCondition(override_dwell_s),
                 prev_wind_active=persisted.wind_active,
+                last_send_at=persisted.last_send_at,
             )
 
     # -- evaluation -----------------------------------------------------------------

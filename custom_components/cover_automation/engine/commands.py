@@ -22,6 +22,7 @@ def on_command_sent(
         prev_last_send_at=rt.last_send_at,
     )
     rt.last_send_at = now
+    p.last_send_at = now
     rt.restoring_until = None
     rt.contrary_since = None
     rt.command_failed = False
@@ -53,11 +54,12 @@ def _next_backoff(rt: CoverRuntime, cfg: CoverConfig, now: datetime) -> datetime
 def on_command_failed(
     p: CoverPersisted, rt: CoverRuntime, cfg: CoverConfig, now: datetime
 ) -> datetime:
-    del p  # ownership stays with the engine; the retry decides
+    # Ownership stays with the engine; the retry decides.
     if rt.pending is not None:
         # A command that never reached the cover must not start the minimum interval, or the
         # 30 s retry (spec §5) would be deferred by gate 8 for a full interval.
         rt.last_send_at = rt.pending.prev_last_send_at
+        p.last_send_at = rt.pending.prev_last_send_at
     rt.pending = None
     rt.contrary_since = None
     rt.command_failed = True

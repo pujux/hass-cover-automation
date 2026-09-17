@@ -41,10 +41,14 @@ def test_persisted_roundtrip():
         wind_active=True,
         enabled=False,
         mode=Mode.DARK_ONLY,
+        last_send_at=at("2026-07-01", "13:30"),
     )
     d = p.to_dict()
     assert d["manual_move_at"] == "2026-07-01T14:00:00+02:00"
+    assert d["last_send_at"] == "2026-07-01T13:30:00+02:00"
     assert CoverPersisted.from_dict(d) == p
+    # a record written before the key existed simply has no clock
+    assert CoverPersisted.from_dict({}).last_send_at is None
 
 
 def test_persisted_defaults_and_helpers():

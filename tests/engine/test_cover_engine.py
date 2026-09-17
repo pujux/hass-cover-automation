@@ -348,3 +348,35 @@ def test_frost_conflict_not_notified_when_unknown_and_not_near_freezing():
     assert r.status is Status.HELD_FROST and r.action is None and not r.notify_frost_conflict
     r2 = e.evaluate(door, sig(frost=None, frost_near_freezing=True))
     assert r2.notify_frost_conflict
+
+
+def test_send_persists_the_move_clock_and_a_failure_rolls_it_back():
+    """R2: `last_send_at` is persisted, so the min-interval clock survives a reload."""
+    e = CoverEngine(CFG, CoverPersisted(owner=Owner.ENGINE, engine_target=Target.OPEN))
+    assert e.p.last_send_at is None
+    r = e.evaluate(inp(), sig())
+    assert r.action == Send(Target.CLOSED, Layer.SHADING)
+    e.on_command_sent(r.action, T0)
+    assert e.p.last_send_at == T0 == e.rt.last_send_at
+
+    e.on_command_failed(T0 + timedelta(seconds=1))
+    assert e.p.last_send_at is None  # rolled back with the runtime clock
+
+
+def test_simulated_send_leaves_the_persisted_move_clock_alone():
+    e = CoverEngine(CFG, CoverPersisted(owner=Owner.ENGINE, engine_target=Target.OPEN))
+    e.on_command_sent(Send(Target.CLOSED, Layer.SHADING, simulated=True), T0)
+    assert e.p.last_send_at is None and e.rt.last_send_at is None
+
+
+def test_engine_seeds_its_runtime_clock_from_the_persisted_one():
+    """A reload must not blank the shading damping (decision 32)."""
+    p = CoverPersisted(owner=Owner.ENGINE, engine_target=Target.CLOSED, last_send_at=T0)
+    e = CoverEngine(CFG, p)
+    assert e.rt.last_send_at == T0
+    # ... and the interval still defers a fresh shading move right after the "reload".
+    r = e.evaluate(inp(actual=CoverState.OPEN), sig(T0 + timedelta(minutes=5)))
+    assert isinstance(r.action, Defer)
+
+    injected = CoverEngine(CFG, p, CoverRuntime())
+    assert injected.rt.last_send_at is None  # an injected runtime keeps its own clock

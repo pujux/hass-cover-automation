@@ -208,3 +208,35 @@ async def test_unload_stops_controller(hass, hub_entry, forecast, services, free
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
     assert len(services["close"]) == 1
+
+
+async def test_min_interval_clock_and_last_move_survive_a_reload(
+    hass, hub_entry, forecast, services, freezer
+) -> None:
+    """R2/decision 32: a reload must not blank the shading damping or the last-move stamp."""
+    sub_id = await setup_full(hass, hub_entry)
+    assert len(services["close"]) == 1
+    set_cover(hass, "cover.bedroom", state="closed", position=0)
+    await hass.async_block_till_done()
+    sent_at = hub_entry.runtime_data.store.data.covers[sub_id].last_send_at
+    assert sent_at is not None
+
+    # Sun off the facade: shading now wants the cover open, but the 10 min interval defers it.
+    set_sun(hass, elevation=40.0, azimuth=300.0)
+    await hass.async_block_till_done()
+    assert not services["open"]
+
+    await hass.config_entries.async_reload(hub_entry.entry_id)
+    await hass.async_block_till_done()
+    assert hub_entry.state is ConfigEntryState.LOADED
+    assert hub_entry.runtime_data.store.data.covers[sub_id].last_send_at == sent_at
+    assert not services["open"]  # still damped, the clock did not reset
+    attrs = hass.states.get(status_entity(hass, sub_id)).attributes
+    assert attrs["last_engine_move"] == sent_at.isoformat()
+
+    freezer.tick(timedelta(minutes=11))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert len(services["open"]) == 1  # the interval has passed
+    assert await hass.config_entries.async_unload(hub_entry.entry_id)
+    await hass.async_block_till_done()

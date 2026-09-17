@@ -63,15 +63,19 @@ async def test_store_load_save_remove(hass: HomeAssistant, hass_storage: dict) -
     store = CoverAutomationStore(hass, "entry1")
     data = await store.async_load()
     assert data == StoreData()
-    data.covers["sub1"] = CoverPersisted(owner=Owner.USER)
+    sent_at = datetime(2026, 7, 1, 12, tzinfo=UTC)
+    data.covers["sub1"] = CoverPersisted(owner=Owner.USER, last_send_at=sent_at)
     await store.async_save()
     key = const.storage_key("entry1")
     assert hass_storage[key]["version"] == const.STORAGE_VERSION
+    assert hass_storage[key]["minor_version"] == const.STORAGE_MINOR_VERSION
     assert hass_storage[key]["data"]["covers"]["sub1"]["owner"] == "user"
+    assert hass_storage[key]["data"]["covers"]["sub1"]["last_send_at"] == sent_at.isoformat()
 
     store2 = CoverAutomationStore(hass, "entry1")
     loaded = await store2.async_load()
     assert loaded.covers["sub1"].owner is Owner.USER
+    assert loaded.covers["sub1"].last_send_at == sent_at
 
     await store2.async_remove()
     assert key not in hass_storage
@@ -111,9 +115,11 @@ async def test_store_minor_version_migration_passthrough(
 ) -> None:
     hass_storage[const.storage_key("e")] = {
         "version": 1,
-        "minor_version": 0,
+        "minor_version": 1,
         "key": const.storage_key("e"),
-        "data": {"covers": {}, "simulation": True},
+        # a minor-1 record has no `last_send_at` key at all
+        "data": {"covers": {"sub1": {"owner": "user"}}, "simulation": True},
     }
     data = await CoverAutomationStore(hass, "e").async_load()
     assert data.simulation is True
+    assert data.covers["sub1"].owner is Owner.USER and data.covers["sub1"].last_send_at is None

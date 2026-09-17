@@ -184,7 +184,7 @@ def _str_to_dt(value: Any) -> datetime | None:
 
 @dataclass(slots=True)
 class CoverPersisted:
-    """The eight per-cover scalars kept in the Store (spec §5)."""
+    """The nine per-cover scalars kept in the Store (spec §5)."""
 
     owner: Owner | None = None
     engine_target: Target | None = None
@@ -194,6 +194,9 @@ class CoverPersisted:
     wind_active: bool = False
     enabled: bool = True
     mode: Mode = Mode.AUTO
+    # The min-interval clock (decision 32): persisted so a reload -- every hub option edit
+    # triggers one -- cannot blank the shading damping and let two moves follow back to back.
+    last_send_at: datetime | None = None
 
     @property
     def override_active(self) -> bool:
@@ -217,6 +220,7 @@ class CoverPersisted:
             "wind_active": self.wind_active,
             "enabled": self.enabled,
             "mode": self.mode.value,
+            "last_send_at": _dt_to_str(self.last_send_at),
         }
 
     @classmethod
@@ -233,6 +237,7 @@ class CoverPersisted:
             wind_active=bool(data.get("wind_active", False)),
             enabled=bool(data.get("enabled", True)),
             mode=Mode(data.get("mode", Mode.AUTO.value)),
+            last_send_at=_str_to_dt(data.get("last_send_at")),
         )
 
 
