@@ -40,11 +40,13 @@
         },
         "data_description": {
           "frost_threshold": "Below this outdoor temperature no cover moves.",
+          "hot_override_entity": "Optional on/off entity (binary sensor, helper toggle or switch) that replaces the computed hot-day signal while set.",
           "open_closed_tolerance": "A cover within this many percent of an end position counts as open or closed.",
           "override_dwell": "How long the engine must want something else before a manual override ends.",
           "sun_release_margin": "Degrees past the window edges before the sun counts as gone.",
           "sunny_off_delay": "How long the weather must be non-sunny before shading may reopen.",
-          "sunny_on_delay": "How long the weather must be sunny before shading may close."
+          "sunny_on_delay": "How long the weather must be sunny before shading may close.",
+          "sunny_override_entity": "Optional on/off entity (binary sensor, helper toggle or switch) that replaces the computed sunny signal while set."
         },
         "title": "Thresholds"
       },
@@ -478,11 +480,13 @@
         },
         "data_description": {
           "frost_threshold": "Below this outdoor temperature no cover moves.",
+          "hot_override_entity": "Optional on/off entity (binary sensor, helper toggle or switch) that replaces the computed hot-day signal while set.",
           "open_closed_tolerance": "A cover within this many percent of an end position counts as open or closed.",
           "override_dwell": "How long the engine must want something else before a manual override ends.",
           "sun_release_margin": "Degrees past the window edges before the sun counts as gone.",
           "sunny_off_delay": "How long the weather must be non-sunny before shading may reopen.",
-          "sunny_on_delay": "How long the weather must be sunny before shading may close."
+          "sunny_on_delay": "How long the weather must be sunny before shading may close.",
+          "sunny_override_entity": "Optional on/off entity (binary sensor, helper toggle or switch) that replaces the computed sunny signal while set."
         },
         "title": "Thresholds"
       }

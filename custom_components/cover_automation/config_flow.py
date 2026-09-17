@@ -44,7 +44,10 @@ def _number(
     return selector.NumberSelector(config)
 
 
-def _entity(domain: str, *, device_class: str | None = None) -> selector.EntitySelector:
+ON_OFF_DOMAINS: tuple[str, ...] = ("binary_sensor", "input_boolean", "switch")
+
+
+def _entity(domain: str | list[str], *, device_class: str | None = None) -> selector.EntitySelector:
     config: selector.EntitySelectorConfig = {"domain": domain}
     if device_class:
         config["device_class"] = device_class
@@ -158,11 +161,11 @@ def thresholds_schema(defaults: Mapping[str, Any], temperature_unit: str) -> vol
             vol.Optional(
                 const.CONF_SUNNY_OVERRIDE_ENTITY,
                 description={"suggested_value": d.get(const.CONF_SUNNY_OVERRIDE_ENTITY)},
-            ): _entity("binary_sensor"),
+            ): _entity(list(ON_OFF_DOMAINS)),
             vol.Optional(
                 const.CONF_HOT_OVERRIDE_ENTITY,
                 description={"suggested_value": d.get(const.CONF_HOT_OVERRIDE_ENTITY)},
-            ): _entity("binary_sensor"),
+            ): _entity(list(ON_OFF_DOMAINS)),
         }
     )
 

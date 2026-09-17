@@ -135,3 +135,18 @@ async def test_reconfigure_flow_changes_hub_entities(hass: HomeAssistant, hub_en
     assert const.CONF_WIND_SENSOR not in hub_entry.data or hub_entry.data[
         const.CONF_WIND_SENSOR
     ] in (None, "")
+
+
+async def test_override_entities_accept_any_on_off_domain(hass: HomeAssistant, hub_entry) -> None:
+    """Sunny/hot overrides may be a binary sensor, an input_boolean helper or a switch."""
+    set_weather(hass)
+    for entity_id in ("input_boolean.force_sunny", "switch.force_hot", "binary_sensor.sunny"):
+        hass.states.async_set(entity_id, "on")
+    result = await hass.config_entries.options.async_init(hub_entry.entry_id)
+    posted = {k: v for k, v in hub_options().items() if k != const.CONF_TEMPERATURE_UNIT}
+    posted[const.CONF_SUNNY_OVERRIDE_ENTITY] = "input_boolean.force_sunny"
+    posted[const.CONF_HOT_OVERRIDE_ENTITY] = "switch.force_hot"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], posted)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert hub_entry.options[const.CONF_SUNNY_OVERRIDE_ENTITY] == "input_boolean.force_sunny"
+    assert hub_entry.options[const.CONF_HOT_OVERRIDE_ENTITY] == "switch.force_hot"
