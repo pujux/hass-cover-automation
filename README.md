@@ -26,7 +26,8 @@ provides a daily forecast.
 ## Configure
 
 1. **Hub**: pick your weather entity (must provide a daily forecast), optionally a wind sensor
-   and an outdoor temperature sensor, then the thresholds.
+   and an outdoor temperature sensor, then the thresholds. The optional *sunny* and *hot day*
+   override entities may be a binary sensor, an `input_boolean` helper or a switch.
 2. **Schedule profiles** (optional): Add a *schedule profile* subentry with up to four rules
    (close at a time or relative to sunset, open once at a time or relative to sunrise) and
    optional quiet hours.
@@ -106,6 +107,20 @@ window", "opened for schedule: open rule fired", and "… (simulated)" while sim
 on), so the reason a cover moved is visible next to the movement itself. **Verbose logging**
 additionally raises the integration's own logger to debug level, which logs the full
 per-evaluation reasoning to the Home Assistant log.
+
+## Release notes
+
+### v0.2.0
+
+- The *sunny* and *hot day* override entities accept `input_boolean` helpers and switches,
+  not just binary sensors.
+- Missing-entity repair issues follow the live state: an optional sensor that disappears is
+  flagged on the next evaluation, and one that comes back clears its issue, both without a
+  reload.
+- The minimum-interval clock is persisted, so a reload no longer resets the shading damping
+  or blanks the *last engine move* attribute.
+- A `sun.sun` outage no longer pauses the automation: the last known sun position is kept,
+  so wind, frost and door protection keep running while the repair issue is raised.
 
 ## Development
 

@@ -1,6 +1,6 @@
 # Cover Automation Integration — Design Spec
 
-Date: 2026-09-15. Revision 3.4 (after two review rounds, the engine implementation's whole-branch review, the HA-binding final fix wave, see `docs/reviews/`, and the engine follow-up that made in-flight duplicate suppression a gate condition, §1.3 gate 7).
+Date: 2026-09-15. Revision 3.5 (after two review rounds, the engine implementation's whole-branch review, the HA-binding final fix wave, see `docs/reviews/`, and the engine follow-up that made in-flight duplicate suppression a gate condition, §1.3 gate 7, and the v0.2.0 robustness follow-up: live missing-entity repairs, a persisted minimum-interval clock and a cached sun position).
 Related: `docs/design-decisions.md` (decision log, #1–#31), `docs/feature-selection.md`,
 `docs/reference/smart-cover-automation-analysis.md`.
 
@@ -246,7 +246,10 @@ hour fires at the first valid minute after it; in a repeated hour it fires once.
   the horizon (with `elev_min = 0`, off at elevation ≤ 0). Source: `sun.sun` attributes
   (HA updates them every 2–4 min in daylight); `sun.sun` is validated at setup (§5). Seed
   at startup/reload with the strict test. The margin is a release margin, not chatter
-  protection; chatter protection is the sunny debounce.
+  protection; chatter protection is the sunny debounce. The controller keeps the last
+  known position through `sun.sun` outages and evaluates on it: only shading opinions may
+  then be stale, the protection layers keep running. Covers are skipped only until a first
+  position is known.
 - **Sunny**: weather condition ∈ configurable set (default `sunny`, `partlycloudy`),
   debounced: on after continuously true for `sunny_on_delay` (10 min), off after
   continuously false for `sunny_off_delay` (20 min). Seeded at startup from the current
@@ -407,11 +410,12 @@ snapshot, persisted state. Nothing to redact.
 
 ## 5. Persistence, startup, error handling
 
-**Store** (`Store(version=1, minor_version=1)` with a migration function; one per hub
+**Store** (`Store(version=1, minor_version=2)` with a migration function; one per hub
 entry; saved immediately on every command send and ownership change, delayed 1 s for
 everything else, immediately on unload, removed on entry removal):
-- Per cover, eight scalars: `owner`, `engine_target`, `manual_move_at`,
-  `desired_at_manual_move`, `dam_layer`, `wind_active`, `enabled`, `mode`.
+- Per cover, nine scalars: `owner`, `engine_target`, `manual_move_at`,
+  `desired_at_manual_move`, `dam_layer`, `wind_active`, `enabled`, `mode`, `last_send_at`
+  (the minimum-interval clock, decision 32).
 - Hub: forecast latch `{date, max, min, hot_day}`; `shading_mode`, `reopening_mode`,
   `simulation_mode`, `verbose_logging`.
 - Entities are views over engine state and write through the engine (decision 17).
@@ -428,7 +432,9 @@ for forecast problems is raised only when a fetch fails on an otherwise healthy 
 Then: create devices (§3); load Store; forward platforms (entities read committed Store
 values in `async_added_to_hass`); register the update listener; subscribe listeners; register
 the first evaluation with `async_at_started` as a coroutine job (fires immediately when HA
-is already running, so reloads work). Missing optional sensors → repair issue, continue.
+is already running, so reloads work). Missing optional sensors → repair issue, continue; the
+controller re-checks them on every evaluation, so a sensor that disappears or comes back
+is repaired without a reload.
 The first evaluation seeds all signals (§2) and is computed with the **persisted** `owner`
 and `manual_move_at` before reconcile writes anything. A cover that is `cover_unavailable`
 is skipped until it reports.
