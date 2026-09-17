@@ -160,7 +160,7 @@ class CoverConfig:
     wind_lower: float = 0.0
     wind_hold_s: int = WIND_HOLD_S
     wind_action: WindAction = WindAction.OPEN
-    profile_id: str | None = None
+    profile_ids: tuple[str, ...] = ()  # schedule profiles in priority order (first = highest)
     min_move_interval_s: int = MIN_MOVE_INTERVAL_S
     confirm_window_s: int = CONFIRM_WINDOW_S
 
@@ -266,6 +266,7 @@ class ScheduleView:
     rule_index: int | None = None
     released: bool = False
     open_rule_fired_at: datetime | None = None  # set while the last fired rule is an open rule
+    profile_id: str | None = None  # which profile produced this opinion (display, markers)
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,7 +323,8 @@ class CoverRuntime:
     frost_conflict_notified: bool = False
     prev_wind_active: bool = False
     restoring_until: datetime | None = None
-    open_rule_satisfied_at: datetime | None = None  # fire time of the open rule already satisfied
+    # fire time of the open rule already satisfied, per profile id
+    open_rule_satisfied: dict[str, datetime] = field(default_factory=dict[str, datetime])
     last_evaluation: Decision | None = None
     last_settled: CoverState | None = None  # last settled state seen (C2: blips are not moves)
 

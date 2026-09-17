@@ -172,8 +172,40 @@ async def test_missing_profile_reference_is_cleared(hass: HomeAssistant, hub_ent
 
     cover_sub = next(iter(hub_entry.subentries.values()))
     cfg, bind = hub_entry.runtime_data.covers[cover_sub.subentry_id]
-    assert cfg.profile_id is None
-    assert bind.profile_id is None
+    assert cfg.profile_ids == ()
+    assert bind.profile_ids == ()
+    issue = ir.async_get(hass).async_get_issue(
+        const.DOMAIN, f"missing_profile_{cover_sub.subentry_id}"
+    )
+    assert issue is not None and issue.translation_key == "missing_profile"
+
+
+async def test_only_the_missing_profile_is_dropped_from_the_list(
+    hass: HomeAssistant, hub_entry
+) -> None:
+    """A cover with two profiles keeps the one that exists and still raises the repair."""
+    hass.config_entries.async_add_subentry(
+        hub_entry, ConfigSubentry(**profile_subentry_data("Night"))
+    )
+    prof_sub = next(iter(hub_entry.subentries.values()))
+    hass.config_entries.async_add_subentry(
+        hub_entry,
+        ConfigSubentry(
+            **cover_subentry_data(
+                "cover.bedroom",
+                schedule_profiles=["does_not_exist", prof_sub.subentry_id],
+            )
+        ),
+    )
+    set_cover(hass, "cover.bedroom")
+    await setup_hub(hass, hub_entry)
+
+    cover_sub = next(
+        s for s in hub_entry.subentries.values() if s.subentry_type == const.SUBENTRY_COVER
+    )
+    cfg, bind = hub_entry.runtime_data.covers[cover_sub.subentry_id]
+    assert cfg.profile_ids == (prof_sub.subentry_id,)
+    assert bind.profile_ids == (prof_sub.subentry_id,)
     issue = ir.async_get(hass).async_get_issue(
         const.DOMAIN, f"missing_profile_{cover_sub.subentry_id}"
     )

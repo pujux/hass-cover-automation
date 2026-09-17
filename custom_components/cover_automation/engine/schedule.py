@@ -9,7 +9,8 @@ caller passing `dt_util.utcnow()` and no `tz` silently evaluates the schedule in
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, tzinfo
 from enum import StrEnum
 from typing import Protocol
@@ -191,8 +192,8 @@ def view(
     *,
     tz: tzinfo | None = None,
 ) -> ScheduleView:
-    """Spec §1.2 layer 5. `satisfied_fire_at` is the fire time of the open rule the engine
-    has already seen satisfied (CoverRuntime.open_rule_satisfied_at)."""
+    """Spec §1.2 layer 5 for ONE profile. `satisfied_fire_at` is the fire time of the open
+    rule the engine has already seen satisfied (`CoverRuntime.open_rule_satisfied[profile_id]`)."""
     if tz is not None:
         now = now.astimezone(tz)
     quiet = quiet_active(profile.quiet_hours, now)
@@ -215,6 +216,43 @@ def view(
     unsatisfied = satisfied_fire_at != fired_at and actual is not CoverState.OPEN
     desired = Desired.OPEN if (in_window and unsatisfied) else Desired.LEAVE_ALONE
     return ScheduleView(quiet, desired, fired_at, index, False, open_fired_at)
+
+
+def view_layered(
+    profiles: Sequence[Profile],
+    now: datetime,
+    sun: SunTimes,
+    actual: CoverState,
+    manual_move_at: datetime | None,
+    satisfied: Mapping[str, datetime],
+    *,
+    tz: tzinfo | None = None,
+) -> ScheduleView:
+    """Merge several profiles, `profiles[0]` highest priority (spec §1.2 layer 5).
+
+    Quiet hours are the union: a profile asking for quiet is respected whatever its rank, so a
+    lower-priority profile can silence the house while a higher one still decides the target.
+    The target itself comes from the first profile with an opinion; if none has one, the view of
+    the highest-priority profile that has fired at all is returned (with `desired` left alone)
+    so `active_rule` and the other display fields still name a real rule.
+
+    `satisfied` maps profile id to the fire time of that profile's already-satisfied open rule,
+    so two profiles' open rules never consume each other's one shot. Only ENABLED profiles are
+    passed in; this function knows nothing about enable state.
+    """
+    if tz is not None:
+        now = now.astimezone(tz)
+    quiet = any(quiet_active(profile.quiet_hours, now) for profile in profiles)
+    fallback: ScheduleView | None = None
+    for profile in profiles:
+        opinion = view(profile, now, sun, actual, manual_move_at, satisfied.get(profile.profile_id))
+        if opinion.desired is not Desired.LEAVE_ALONE:
+            return replace(opinion, quiet_active=quiet, profile_id=profile.profile_id)
+        if fallback is None and opinion.rule_fired_at is not None:
+            fallback = replace(opinion, quiet_active=quiet, profile_id=profile.profile_id)
+    if fallback is not None:
+        return fallback
+    return ScheduleView(quiet_active=quiet)
 
 
 def _time_in_quiet(quiet: QuietHours | None, clock: time) -> bool:

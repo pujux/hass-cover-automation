@@ -322,7 +322,7 @@ def test_decide_is_side_effect_free_and_matches_evaluate():
     decision = e.decide(inputs, signals)
     assert e.p.to_dict() == snapshot  # no dwell, no §1.5(e), no rule bookkeeping
     assert e.rt.last_evaluation is None
-    assert e.rt.open_rule_satisfied_at is None
+    assert e.rt.open_rule_satisfied == {}
     assert e.rt.last_settled is None
     assert e.rt.restoring_until == T0 + timedelta(minutes=5)  # the window is only read
     assert decision == e.evaluate(inputs, signals).decision

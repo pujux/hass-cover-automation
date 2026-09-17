@@ -202,12 +202,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: CoverAutomationConfigEnt
         ir.async_delete_issue(hass, const.DOMAIN, broken_issue_id)
 
         issue_id = _missing_profile_issue_id(subentry.subentry_id)
-        if cfg.profile_id is not None and cfg.profile_id not in profiles:
+        known = tuple(pid for pid in cfg.profile_ids if pid in profiles)
+        if len(known) != len(cfg.profile_ids):
+            # Only the unknown ids go: the remaining profiles keep deciding in their own order.
             _LOGGER.warning(
-                "Cover %s references missing profile %s; treating as none", cfg.name, cfg.profile_id
+                "Cover %s references missing schedule profiles %s; dropping them",
+                cfg.name,
+                ", ".join(pid for pid in cfg.profile_ids if pid not in profiles),
             )
-            cfg = replace(cfg, profile_id=None)
-            bind = replace(bind, profile_id=None)
+            cfg = replace(cfg, profile_ids=known)
+            bind = replace(bind, profile_ids=known)
             ir.async_create_issue(
                 hass,
                 const.DOMAIN,

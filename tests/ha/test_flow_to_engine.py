@@ -39,7 +39,7 @@ async def test_cover_subentry_defaults_map_to_engine_values(hass: HomeAssistant,
     assert cfg.wind_hold_s == 900
     assert cfg.min_move_interval_s == 600
     assert cfg.confirm_window_s == 120
-    assert cfg.profile_id is None
+    assert cfg.profile_ids == ()
     assert cfg.comfort_floor == 21.0
     assert cfg.comfort_ceiling == 25.0
     assert cfg.shading_rule is ShadingRule.FORECAST_WITH_ROOM

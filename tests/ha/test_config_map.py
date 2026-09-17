@@ -124,10 +124,10 @@ def test_cover_config_maps_all_fields_and_units():
         50.0,
         1200,
     )
-    assert cfg.wind_action is WindAction.HOLD and cfg.profile_id == "prof1"
+    assert cfg.wind_action is WindAction.HOLD and cfg.profile_ids == ("prof1",)
     assert (cfg.min_move_interval_s, cfg.confirm_window_s) == (900, 90)
     assert bind.cover_entity == "cover.bedroom" and bind.door_sensor == "binary_sensor.terrace"
-    assert bind.room_sensor == "sensor.bedroom_temp" and bind.profile_id == "prof1"
+    assert bind.room_sensor == "sensor.bedroom_temp" and bind.profile_ids == ("prof1",)
     assert (bind.temperature_unit, bind.wind_unit) == ("°C", "km/h")
 
 
@@ -147,7 +147,7 @@ def test_cover_config_defaults_and_none_profile():
         cfg.name == "X"
         and not cfg.has_room_sensor
         and not cfg.wind_enabled
-        and cfg.profile_id is None
+        and cfg.profile_ids == ()
     )
     assert (
         cfg.tolerance_left,
@@ -160,7 +160,7 @@ def test_cover_config_defaults_and_none_profile():
         600,
         120,
     )
-    assert bind.profile_id is None and bind.temperature_unit == hub.temperature_unit
+    assert bind.profile_ids == () and bind.temperature_unit == hub.temperature_unit
 
 
 def test_wind_disabled_when_hub_has_no_wind_sensor():
@@ -252,3 +252,44 @@ def test_invalid_shading_rule_raises():
     )
     with pytest.raises(ValueError):
         cover_config(se, hub)
+
+
+def _cover_with(**data) -> tuple:
+    return cover_config(
+        subentry(
+            const.SUBENTRY_COVER,
+            {const.CONF_COVER_ENTITY: "cover.x", const.CONF_AZIMUTH: 180, **data},
+            title="X",
+        ),
+        hub_config(make_hub_entry()),
+    )
+
+
+def test_profile_list_is_read_in_priority_order():
+    cfg, bind = _cover_with(**{const.CONF_SCHEDULE_PROFILES: ["p2", "p1", "p3"]})
+    assert cfg.profile_ids == ("p2", "p1", "p3") and bind.profile_ids == cfg.profile_ids
+
+
+def test_legacy_single_profile_key_still_loads(caplog):
+    """The eleven production covers store `schedule_profile`; no migration may be needed."""
+    cfg, _bind = _cover_with(**{const.CONF_SCHEDULE_PROFILE: "prof1"})
+    assert cfg.profile_ids == ("prof1",)
+    none_cfg, none_bind = _cover_with(**{const.CONF_SCHEDULE_PROFILE: const.PROFILE_NONE})
+    assert none_cfg.profile_ids == () and none_bind.profile_ids == ()
+    # a cover written before schedules existed at all
+    assert _cover_with()[0].profile_ids == ()
+
+
+def test_profile_list_wins_over_the_legacy_key():
+    cfg, _bind = _cover_with(
+        **{
+            const.CONF_SCHEDULE_PROFILE: "prof1",
+            const.CONF_SCHEDULE_PROFILES: ["prof2"],
+        }
+    )
+    assert cfg.profile_ids == ("prof2",)
+    # an explicitly emptied list means "no schedule", not "fall back to the legacy key"
+    emptied, _ = _cover_with(
+        **{const.CONF_SCHEDULE_PROFILE: "prof1", const.CONF_SCHEDULE_PROFILES: []}
+    )
+    assert emptied.profile_ids == ()

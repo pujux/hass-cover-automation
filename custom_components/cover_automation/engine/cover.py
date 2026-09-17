@@ -95,8 +95,14 @@ class CoverEngine:
         if cfg.wind_enabled and rt.prev_wind_active and not inputs.wind_active:
             rt.restoring_until = now + timedelta(seconds=RESTORING_WINDOW_S)
         rt.prev_wind_active = inputs.wind_active
-        if inputs.schedule.open_rule_fired_at is not None and inputs.actual is CoverState.OPEN:
-            rt.open_rule_satisfied_at = inputs.schedule.open_rule_fired_at
+        sched = inputs.schedule
+        if (
+            sched.open_rule_fired_at is not None
+            and sched.profile_id is not None
+            and inputs.actual is CoverState.OPEN
+        ):
+            # Per profile: two profiles' open rules each get their own one shot.
+            rt.open_rule_satisfied[sched.profile_id] = sched.open_rule_fired_at
         restoring = rt.restoring_until is not None and now < rt.restoring_until
 
         decision = layers.evaluate(cfg, p, inputs, signals, restoring=restoring)

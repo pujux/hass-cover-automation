@@ -60,7 +60,8 @@ CONF_WIND_UPPER: Final = "wind_upper"
 CONF_WIND_LOWER: Final = "wind_lower"
 CONF_WIND_HOLD: Final = "wind_hold"  # minutes
 CONF_WIND_ACTION: Final = "wind_action"
-CONF_SCHEDULE_PROFILE: Final = "schedule_profile"
+CONF_SCHEDULE_PROFILE: Final = "schedule_profile"  # pre-0.5 single profile, still readable
+CONF_SCHEDULE_PROFILES: Final = "schedule_profiles"  # ordered ids, highest priority first
 CONF_MIN_MOVE_INTERVAL: Final = "min_move_interval"  # minutes
 CONF_CONFIRM_WINDOW: Final = "confirm_window"  # seconds
 

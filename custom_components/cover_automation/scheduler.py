@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, tzinfo
 from typing import Any
@@ -61,16 +61,20 @@ class ScheduleTracker:
         self,
         hass: HomeAssistant,
         profiles: Mapping[str, Profile],
-        cover_profile: Mapping[str, str | None],
+        cover_profiles: Mapping[str, Sequence[str]],
         on_fire: Callable[[frozenset[str], datetime], Awaitable[None]],
         *,
         sun: SunTimes | None = None,
+        enabled: Callable[[str], bool] | None = None,
         create_task: Callable[[Coroutine[Any, Any, None], str], None] | None = None,
     ) -> None:
         self.hass = hass
         self.profiles = dict(profiles)
-        self.cover_profile = dict(cover_profile)
+        # cover id -> its schedule profile ids in priority order (first = highest).
+        self.cover_profiles = {cid: tuple(ids) for cid, ids in cover_profiles.items()}
         self._on_fire = on_fire
+        # A switched-off profile has no opinion and no timers; the controller owns the flag.
+        self._enabled = enabled or (lambda _profile_id: True)
         # Without a factory Home Assistant spawns a plain task for the coroutine, which would
         # outlive a reload; the entry hands one in so the fire handler dies with the entry (F9).
         self._create_task = create_task
@@ -85,11 +89,15 @@ class ScheduleTracker:
         return dt_util.get_default_time_zone()
 
     def _covers_of(self, profile_id: str) -> tuple[str, ...]:
-        return tuple(sorted(c for c, p in self.cover_profile.items() if p == profile_id))
+        return tuple(sorted(c for c, ids in self.cover_profiles.items() if profile_id in ids))
 
-    def _profile_for(self, cover_id: str) -> Profile | None:
-        profile_id = self.cover_profile.get(cover_id)
-        return self.profiles.get(profile_id) if profile_id else None
+    def enabled_profiles(self, cover_id: str) -> tuple[Profile, ...]:
+        """The cover's switched-on profiles, highest priority first."""
+        return tuple(
+            profile
+            for profile_id in self.cover_profiles.get(cover_id, ())
+            if self._enabled(profile_id) and (profile := self.profiles.get(profile_id)) is not None
+        )
 
     def view(
         self,
@@ -97,18 +105,23 @@ class ScheduleTracker:
         now: datetime,
         actual: CoverState,
         manual_move_at: datetime | None,
-        satisfied_fire_at: datetime | None,
+        satisfied: Mapping[str, datetime],
     ) -> ScheduleView:
-        profile = self._profile_for(cover_id)
-        if profile is None:
-            return ScheduleView()
-        return schedule.view(
-            profile, now, self.sun, actual, manual_move_at, satisfied_fire_at, tz=self.tz
+        return schedule.view_layered(
+            self.enabled_profiles(cover_id),
+            now,
+            self.sun,
+            actual,
+            manual_move_at,
+            satisfied,
+            tz=self.tz,
         )
 
     def _events(self, now: datetime) -> list[NextEvent]:
         events: list[NextEvent] = []
         for profile_id, profile in self.profiles.items():
+            if not self._enabled(profile_id):
+                continue  # a switched-off profile arms no timer and plans no event
             covers = self._covers_of(profile_id)
             if not covers:
                 continue
@@ -127,25 +140,30 @@ class ScheduleTracker:
         return events[0] if events else None
 
     def next_event_for(self, cover_id: str, now: datetime) -> NextEvent | None:
-        profile_id = self.cover_profile.get(cover_id)
-        return next((e for e in self._events(now) if e.profile_id == profile_id), None)
+        """The cover's earliest upcoming event across all of its enabled profiles."""
+        wanted = set(self.cover_profiles.get(cover_id, ()))
+        return next((e for e in self._events(now) if e.profile_id in wanted), None)
 
-    def active_rule_label(self, cover_id: str, now: datetime) -> str | None:
-        profile = self._profile_for(cover_id)
-        if profile is None:
+    def active_rule_label(
+        self, profile_id: str | None, rule_index: int | None, fired_at: datetime | None
+    ) -> str | None:
+        """Name the rule the merged `ScheduleView` reports, so the label follows the winner."""
+        if profile_id is None or rule_index is None or fired_at is None:
             return None
-        last = schedule.last_fired(profile, now, self.sun, tz=self.tz)
-        if last is None:
+        profile = self.profiles.get(profile_id)
+        if profile is None or rule_index >= len(profile.rules):
             return None
-        fired_at, index = last
-        rule_action = profile.rules[index].action
+        rule_action = profile.rules[rule_index].action
         action = _RULE_VERB.get(rule_action, rule_action.value)
-        return f"{action} rule {index + 1} of {profile.name} ({fired_at.astimezone(self.tz):%H:%M})"
+        clock = f"{fired_at.astimezone(self.tz):%H:%M}"
+        return f"{action} rule {rule_index + 1} of {profile.name} ({clock})"
 
     def skipped_rules_today(self, now: datetime) -> list[tuple[str, int]]:
         day = now.astimezone(self.tz).date()
         skipped: list[tuple[str, int]] = []
         for profile_id, profile in self.profiles.items():
+            if not self._enabled(profile_id):
+                continue  # a switched-off profile skips nothing: it simply does not run
             for index, rule in enumerate(profile.rules):
                 if rule.time_mode is TimeMode.FIXED:
                     continue

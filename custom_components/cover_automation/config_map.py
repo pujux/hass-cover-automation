@@ -45,7 +45,7 @@ class CoverBindings:
     cover_entity: str
     door_sensor: str | None
     room_sensor: str | None
-    profile_id: str | None
+    profile_ids: tuple[str, ...]
     temperature_unit: str
     wind_unit: str | None
 
@@ -60,6 +60,20 @@ def _opt_str(data: Mapping[str, Any], key: str, *, none_sentinel: bool = False) 
     if value in (None, "") or (none_sentinel and value == const.PROFILE_NONE):
         return None
     return str(value)
+
+
+def profile_ids(data: Mapping[str, Any]) -> tuple[str, ...]:
+    """The cover's schedule profiles in priority order, highest first.
+
+    Backwards compatible on purpose (no migration): covers written before v0.5.0 carry the
+    single `schedule_profile` key -- "none" or one subentry id -- and are read as a zero- or
+    one-element tuple. The list key wins whenever it is present, even when it is empty.
+    """
+    raw = data.get(const.CONF_SCHEDULE_PROFILES)
+    if raw is not None:
+        return tuple(str(value) for value in raw if str(value))
+    legacy = _opt_str(data, const.CONF_SCHEDULE_PROFILE, none_sentinel=True)
+    return (legacy,) if legacy is not None else ()
 
 
 def _minutes(data: Mapping[str, Any], key: str, default_min: int) -> int:
@@ -119,7 +133,7 @@ def cover_config(subentry: ConfigSubentry, hub: HubConfig) -> tuple[CoverConfig,
     d = subentry.data
     room_sensor = _opt_str(d, const.CONF_ROOM_SENSOR)
     door_sensor = _opt_str(d, const.CONF_DOOR_SENSOR)
-    profile_id = _opt_str(d, const.CONF_SCHEDULE_PROFILE, none_sentinel=True)
+    profiles = profile_ids(d)
     wind_enabled = bool(d.get(const.CONF_WIND_ENABLED, False)) and hub.wind_sensor is not None
     name = str(d.get(const.CONF_NAME) or subentry.title)
     cfg = CoverConfig(
@@ -142,7 +156,7 @@ def cover_config(subentry: ConfigSubentry, hub: HubConfig) -> tuple[CoverConfig,
         wind_lower=float(d.get(const.CONF_WIND_LOWER, 0.0)),
         wind_hold_s=_minutes(d, const.CONF_WIND_HOLD, const.DEFAULT_WIND_HOLD_MIN),
         wind_action=WindAction(d.get(const.CONF_WIND_ACTION, WindAction.OPEN.value)),
-        profile_id=profile_id,
+        profile_ids=profiles,
         min_move_interval_s=_minutes(
             d, const.CONF_MIN_MOVE_INTERVAL, const.DEFAULT_MIN_MOVE_INTERVAL_MIN
         ),
@@ -154,7 +168,7 @@ def cover_config(subentry: ConfigSubentry, hub: HubConfig) -> tuple[CoverConfig,
         cover_entity=str(d[const.CONF_COVER_ENTITY]),
         door_sensor=door_sensor,
         room_sensor=room_sensor,
-        profile_id=profile_id,
+        profile_ids=profiles,
         temperature_unit=str(d.get(const.CONF_TEMPERATURE_UNIT, hub.temperature_unit)),
         wind_unit=_opt_str(d, const.CONF_WIND_UNIT),
     )

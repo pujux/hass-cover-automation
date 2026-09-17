@@ -538,3 +538,51 @@ def test_o3_release_rule_clears_a_manual_override():
         Target.CLOSED,
         Layer.SHADING,
     )
+
+
+def test_p_two_profiles_with_overlapping_holds():
+    """Two profiles on one cover: the lower-priority hold outlives the higher-priority one.
+
+    "Evening" closes at 20:00 and releases at 06:00; "Vacation" closes at 22:00 and releases
+    at 09:00. Between 06:00 and 09:00 the top profile is silent, so Vacation -- one rank down
+    -- is what keeps the cover shut; only its release hands the morning back to shading.
+    """
+    evening = Profile(
+        "evening",
+        "Evening",
+        (
+            Rule(RuleAction.CLOSED, TimeMode.FIXED, time=t("20:00")),
+            Rule(RuleAction.RELEASE, TimeMode.FIXED, time=t("06:00")),
+        ),
+    )
+    vacation = Profile(
+        "vacation",
+        "Vacation",
+        (
+            Rule(RuleAction.CLOSED, TimeMode.FIXED, time=t("22:00")),
+            Rule(RuleAction.RELEASE, TimeMode.FIXED, time=t("09:00")),
+        ),
+    )
+    sim = Sim(CFG, at("2026-07-01", "19:30"), profiles=(evening, vacation))
+    sim.night()
+    sim.until("2026-07-01", "20:05")
+    assert sim.actual is CoverState.CLOSED  # the top profile closes it
+    assert sim.commands[-1][1:] == (Target.CLOSED, Layer.SCHEDULE)
+    closed_by = len(sim.commands)
+
+    sim.until("2026-07-01", "22:05")  # Vacation's close rule fires under a cover already shut
+    assert sim.actual is CoverState.CLOSED and len(sim.commands) == closed_by
+
+    sim.until("2026-07-02", "05:55")
+    sim.day(hits=True)
+    sim.sunny = False  # bright but overcast morning: shading has no reason to shade
+    sim.until("2026-07-02", "06:05")  # Evening releases, Vacation still holds
+    assert sim.actual is CoverState.CLOSED
+    assert sim.engine.rt.last_evaluation.layer is Layer.SCHEDULE
+    sim.until("2026-07-02", "08:59")
+    assert sim.actual is CoverState.CLOSED and len(sim.commands) == closed_by
+
+    sim.until("2026-07-02", "09:05")  # Vacation releases too: shading finally decides
+    assert sim.engine.rt.last_evaluation.layer is Layer.SHADING
+    assert sim.actual is CoverState.OPEN
+    assert sim.commands[-1][1:] == (Target.OPEN, Layer.SHADING)

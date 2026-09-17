@@ -128,7 +128,7 @@ class CoverAutomationController:
         self._schedule = ScheduleTracker(
             hass,
             self._profiles,
-            {cid: cfg.profile_id for cid, (cfg, _b) in covers.items()},
+            {cid: cfg.profile_ids for cid, (cfg, _b) in covers.items()},
             self._on_rule_fired,
             create_task=self._create_task,
         )
@@ -470,7 +470,7 @@ class CoverAutomationController:
         """decide() → reconcile() before the first evaluate() ever runs (spec §5)."""
         engine, sig = self._engines[cover_id], self._signals[cover_id]
         sig.seed(now, sun)
-        first = self._schedule.view(cover_id, now, actual, engine.p.manual_move_at, None)
+        first = self._schedule.view(cover_id, now, actual, engine.p.manual_move_at, {})
         decision = engine.decide(sig.inputs(actual, first), hub_sig)
         before = engine.p.to_dict()
         message = engine.reconcile(actual, decision, now)
@@ -507,7 +507,7 @@ class CoverAutomationController:
         else:
             sig.update(now, sun)
         schedule = self._schedule.view(
-            cover_id, now, actual, engine.p.manual_move_at, engine.rt.open_rule_satisfied_at
+            cover_id, now, actual, engine.p.manual_move_at, engine.rt.open_rule_satisfied
         )
         inputs = sig.inputs(actual, schedule)
         result = engine.evaluate(inputs, hub_sig, rule_fired=rule_fired)
@@ -840,7 +840,11 @@ class CoverAutomationController:
             hot_day=self._hub_signals.hot_day,
             room_state=sig.room_state,
             wind_state=sig.wind_state,
-            active_rule=self._schedule.active_rule_label(cover_id, now),
+            active_rule=self._schedule.active_rule_label(
+                inputs.schedule.profile_id,
+                inputs.schedule.rule_index,
+                inputs.schedule.rule_fired_at,
+            ),
             next_planned_action=planned,
             next_planned_at=planned_at,
             last_engine_move=p.last_send_at,

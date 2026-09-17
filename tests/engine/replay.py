@@ -16,7 +16,6 @@ from custom_components.cover_automation.engine.model import (
     HubSignals,
     Layer,
     ReopeningMode,
-    ScheduleView,
     Send,
     ShadingMode,
     Target,
@@ -37,7 +36,8 @@ class FakeSun:
 class Sim:
     cfg: CoverConfig
     start: datetime
-    profile: schedule.Profile | None = None
+    profile: schedule.Profile | None = None  # shorthand for a single-profile cover
+    profiles: tuple[schedule.Profile, ...] = ()  # priority order, first = highest
     persisted: CoverPersisted = field(default_factory=CoverPersisted)
     reopening: ReopeningMode = ReopeningMode.PASSIVE
     shading_mode: ShadingMode = ShadingMode.AUTO
@@ -63,6 +63,8 @@ class Sim:
     sun: FakeSun = field(default_factory=FakeSun)
 
     def __post_init__(self) -> None:
+        if self.profile is not None:
+            self.profiles = (self.profile, *self.profiles)
         self.engine = CoverEngine(self.cfg, self.persisted)
         self.now = self.start
         self._last_rule_check = self.start
@@ -114,19 +116,18 @@ class Sim:
             state = self._arrival[1]
             self._arrival = None
             self.set_actual(state)
-        rule_fired = False
-        view = ScheduleView()
-        if self.profile is not None:
-            fired = schedule.fired_between(self.profile, self._last_rule_check, self.now, self.sun)
-            rule_fired = bool(fired)
-            view = schedule.view(
-                self.profile,
-                self.now,
-                self.sun,
-                self.actual,
-                self.engine.p.manual_move_at,
-                satisfied_fire_at=self.engine.rt.open_rule_satisfied_at,
-            )
+        rule_fired = any(
+            schedule.fired_between(profile, self._last_rule_check, self.now, self.sun)
+            for profile in self.profiles
+        )
+        view = schedule.view_layered(
+            self.profiles,
+            self.now,
+            self.sun,
+            self.actual,
+            self.engine.p.manual_move_at,
+            self.engine.rt.open_rule_satisfied,
+        )
         self._last_rule_check = self.now
         self.engine.check_pending(self.actual, self.now)
         inputs = CoverInputs(
@@ -185,12 +186,10 @@ class Sim:
         """Simulate an HA restart: runtime is lost, persisted state kept, reconcile runs."""
         persisted = CoverPersisted.from_dict(self.engine.p.to_dict())
         self.engine = CoverEngine(self.cfg, persisted)
-        view = ScheduleView()
-        if self.profile is not None:
-            view = schedule.view(
-                self.profile, self.now, self.sun, self.actual, persisted.manual_move_at
-            )
-            # runtime is lost on restart: open_rule_satisfied_at starts as None on purpose
+        # runtime is lost on restart: the satisfied markers start empty on purpose
+        view = schedule.view_layered(
+            self.profiles, self.now, self.sun, self.actual, persisted.manual_move_at, {}
+        )
         # Spec §5: the first decision is computed before reconcile writes anything.
         first = self.engine.decide(
             CoverInputs(
