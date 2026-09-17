@@ -1103,7 +1103,62 @@ async def test_wind_override_forces_protection_and_defers_the_re_close(
         view = controller.cover_views[sub_id]
         assert view.wind_state == "inactive" and not view.wind_active
         assert not controller.hub_view.any_wind_active
-        assert len(cover_services["close"]) == 1  # restoring window: no immediate re-close
+        # The release opens the engine's restoring window (a quiet-hours exemption only,
+        # see the test below); what actually holds the shading close back here is gate 8,
+        # the minimum interval since the wind open.
+        assert controller.engine(sub_id).rt.restoring_until is not None
+        assert len(cover_services["close"]) == 1
+        assert view.next_planned_action == "closed (min_interval)"
+        assert view.next_planned_at == controller.engine(sub_id).p.last_send_at + timedelta(
+            minutes=10
+        )
+        freezer.tick(timedelta(minutes=11))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+        assert len(cover_services["close"]) == 2  # min interval elapsed: shading closes again
+    finally:
+        await controller.async_stop()
+
+
+async def test_wind_override_release_may_close_during_quiet_hours(
+    hass, hub_entry, cover_services, freezer
+):
+    """The restoring window is a quiet-hours exemption: the post-release close goes out.
+
+    `test_quiet_hours_block_a_shading_close` is the counterpart without a wind episode.
+    """
+    _configure_wind_override(hass, hub_entry)
+    hass.states.async_set(WIND_OVERRIDE, "on")
+    freezer.move_to(dt_util.now().replace(hour=23, minute=0, second=0, microsecond=0))
+    controller, sub_id = await start_controller(
+        hass,
+        hub_entry,
+        cover_overrides=WIND_COVER,
+        profile=profile_subentry_data(
+            "Night",
+            rules=[
+                {
+                    const.CONF_RULE_ACTION: "open",
+                    const.CONF_RULE_TIME_MODE: "fixed",
+                    const.CONF_RULE_TIME: "07:00:00",
+                }
+            ],
+            quiet=("22:00:00", "07:00:00"),
+        ),
+    )
+    try:
+        # Forced wind wants the cover open and it already is, so nothing has been sent yet.
+        assert not cover_services["close"] and not cover_services["open"]
+        assert controller.cover_views[sub_id].wind_state == "forced"
+
+        hass.states.async_set(WIND_OVERRIDE, "off")
+        await hass.async_block_till_done()
+        assert len(cover_services["close"]) == 1  # quiet hours exempted while restoring
+        view = controller.cover_views[sub_id]
+        assert view.winning_layer == "shading" and view.status is Status.CLOSED_SHADING
+        # The send itself consumes the window (`commands.on_sent` clears it), so the
+        # command going out at all is the evidence that quiet hours were exempted.
+        assert controller.engine(sub_id).rt.restoring_until is None
     finally:
         await controller.async_stop()
 
@@ -1119,6 +1174,29 @@ async def test_wind_override_leaves_a_cover_without_wind_protection_alone(
         view = controller.cover_views[sub_id]
         assert view.wind_state == "disabled" and not view.wind_active
         assert not controller.hub_view.any_wind_active
+    finally:
+        await controller.async_stop()
+
+
+@pytest.mark.parametrize(("wind_action", "opens"), [("open", 1), ("hold", 0)])
+async def test_wind_override_is_applied_on_the_first_reconcile_for_either_wind_action(
+    hass, hub_entry, cover_services, wind_action, opens
+):
+    """The helper is already on at startup, so forcing applies from the first evaluation."""
+    _configure_wind_override(hass, hub_entry)
+    hass.states.async_set(WIND_OVERRIDE, "on")
+    controller, sub_id = await start_controller(
+        hass,
+        hub_entry,
+        cover_overrides={**WIND_COVER, const.CONF_WIND_ACTION: wind_action},
+        cover_state=("closed", 0, 3),
+    )
+    try:
+        assert len(cover_services["open"]) == opens
+        assert not cover_services["close"]  # wind wins over the hot sunny day
+        view = controller.cover_views[sub_id]
+        assert view.status is Status.PROTECTED_WIND and view.wind_state == "forced"
+        assert view.wind_active and controller.hub_view.any_wind_active
     finally:
         await controller.async_stop()
 

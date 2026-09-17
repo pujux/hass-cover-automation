@@ -286,7 +286,12 @@ hour fires at the first valid minute after it; in a repeated hour it fires once.
   cover with `wind_enabled` regardless of the sensor (status attribute `wind_state =
   forced`), each cover keeping its own `wind_action`; off, unavailable or not configured,
   the computed value applies. It never disables protection, and the computed value keeps
-  being tracked underneath so the release is correct the moment it goes off (decision 34).
+  being tracked underneath so the release is correct the moment it goes off while HA is
+  running (decision 34). A restart during a forced episode seeds the per-cover protection
+  active (§5 persists `wind_active`), so the cover stays wind-held for up to the wind hold
+  time and then opens the usual restoring window, exactly as a real wind episode that ended
+  during downtime would. The override requires a hub wind sensor: without one no cover has
+  wind protection to force.
 - **Frost**: outdoor temperature from a sensor or the weather entity's `temperature`
   attribute. `frost_active` at ≤ threshold (default 0 °C), release at > threshold + 1 K.
   Source unavailable → last value held for `weather_grace`, then `unknown`; the last known

@@ -48,7 +48,7 @@
           "sunny_off_delay": "How long the weather must be non-sunny before shading may reopen.",
           "sunny_on_delay": "How long the weather must be sunny before shading may close.",
           "sunny_override_entity": "Optional on/off entity (binary sensor, helper toggle or switch) that replaces the computed sunny signal while set.",
-          "wind_override_entity": "Optional on/off entity. While on, wind protection is active for every cover that has it enabled, regardless of the wind sensor."
+          "wind_override_entity": "Optional on/off entity. While on, wind protection is active for every cover that has it enabled, regardless of the wind sensor. Requires a hub wind sensor."
         },
         "title": "Thresholds"
       },
@@ -490,7 +490,7 @@
           "sunny_off_delay": "How long the weather must be non-sunny before shading may reopen.",
           "sunny_on_delay": "How long the weather must be sunny before shading may close.",
           "sunny_override_entity": "Optional on/off entity (binary sensor, helper toggle or switch) that replaces the computed sunny signal while set.",
-          "wind_override_entity": "Optional on/off entity. While on, wind protection is active for every cover that has it enabled, regardless of the wind sensor."
+          "wind_override_entity": "Optional on/off entity. While on, wind protection is active for every cover that has it enabled, regardless of the wind sensor. Requires a hub wind sensor."
         },
         "title": "Thresholds"
       }

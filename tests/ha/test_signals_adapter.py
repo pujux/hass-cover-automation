@@ -311,8 +311,14 @@ async def test_forced_wind_overrides_the_sensor_for_a_wind_enabled_cover(
     sig.force_wind = True
     assert sig.wind_active is True and sig.wind_state == "forced"
     assert sig.inputs(CoverState.CLOSED, ScheduleView()).wind_active is True
+    # a dead sensor still reports as such: it is the more actionable fact, and protection
+    # stays forced underneath.
+    hass.states.async_set("sensor.wind", "unavailable")
+    sig.update(now + timedelta(seconds=30), (180.0, 40.0))
+    assert sig.wind_active is True and sig.wind_state == "unavailable"
     # the computed protection keeps running underneath, so switching the override off
     # falls straight back to the (calm) sensor rather than to a stale hold.
+    set_sensor(hass, "sensor.wind", 5.0, unit="km/h")
     sig.update(now + timedelta(minutes=1), (180.0, 40.0))
     sig.force_wind = False
     assert sig.wind_active is False and sig.wind_state == "inactive"

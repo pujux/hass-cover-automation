@@ -29,7 +29,8 @@ provides a daily forecast.
    and an outdoor temperature sensor, then the thresholds. The optional *sunny*, *hot day* and
    *wind protection* override entities may be a binary sensor, an `input_boolean` helper or a
    switch. The wind override only forces: while it is on every cover with wind protection
-   enabled takes its wind action, and while it is off the wind sensor decides as usual.
+   enabled takes its wind action, and while it is off the wind sensor decides as usual. It
+   needs a hub wind sensor, because without one no cover has wind protection to force.
 2. **Schedule profiles** (optional): Add a *schedule profile* subentry with up to four rules
    (close at a time or relative to sunset, open once at a time or relative to sunrise, or
    release an earlier close back to the automation) and optional quiet hours.
@@ -119,8 +120,11 @@ per-evaluation reasoning to the Home Assistant log.
 - A hub-level **wind protection override entity**. Point it at a binary sensor, an
   `input_boolean` helper or a switch, and while it is on every cover with wind protection
   enabled takes its wind action regardless of what the wind sensor says — a manual storm
-  switch, and the way to keep an existing "Windschutz" helper in charge. It only forces:
-  while it is off the wind sensor decides as before, so real wind is still handled.
+  switch, and the way to keep an existing "Windschutz" helper in charge. It needs a hub wind
+  sensor, and it only forces: while it is off the wind sensor decides as before, so real wind
+  is still handled. Switching it off hands straight back to the sensor while Home Assistant
+  is running; a restart during a forced episode leaves the cover wind-held for up to the wind
+  hold time first, exactly like a real gust that dropped while Home Assistant was down.
 
 ### v0.3.0
 

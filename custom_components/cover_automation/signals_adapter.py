@@ -345,10 +345,12 @@ class CoverSignalSet:
     def wind_state(self) -> str:
         if self.wind is None:
             return "disabled"
+        if self.wind.unavailable:
+            # A dead sensor is the more actionable fact and keeps its repair issue legible;
+            # protection is still forced underneath (`wind_active` stays True).
+            return "unavailable"
         if self._forced:
             return "forced"
-        if self.wind.unavailable:
-            return "unavailable"
         return "active" if self.wind.active else "inactive"
 
     @property
