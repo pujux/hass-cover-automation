@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 
 from . import const
+from .config_map import CoverBindings, HubConfig
+from .engine.model import CoverConfig
 
 ISSUE_FROST_CONFLICT = "frost_conflict"
 ISSUE_WIND_UNAVAILABLE = "wind_sensor_unavailable"
@@ -50,6 +52,33 @@ def hub_issue_id(entry_id: str, kind: str) -> str:
     return f"{kind}_{entry_id}"
 
 
+def missing_entity_issue_id(entry_id: str, entity_id: str) -> str:
+    return f"missing_entity_{entry_id}_{entity_id}"
+
+
+def optional_entity_ids(
+    hub: HubConfig, covers: Mapping[str, tuple[CoverConfig, CoverBindings]]
+) -> list[str]:
+    """Entities that are nice to have; missing ones get a repair but never block setup (spec §5).
+
+    The controller re-checks this list on every evaluation, so a sensor that disappears (or
+    comes back) is repaired without a reload; `__init__` uses it for the stale-issue sweep.
+    """
+    wanted: list[str] = [
+        e
+        for e in (
+            hub.wind_sensor,
+            hub.outdoor_temperature_sensor,
+            hub.sunny_override_entity,
+            hub.hot_override_entity,
+        )
+        if e
+    ]
+    for _cfg, bind in covers.values():
+        wanted.extend(e for e in (bind.cover_entity, bind.door_sensor, bind.room_sensor) if e)
+    return wanted
+
+
 def cover_issue_id(kind: str, subentry_id: str) -> str:
     return f"{kind}_{subentry_id}"
 
@@ -87,7 +116,7 @@ def entry_owned_issue_ids(
 ) -> set[str]:
     """Every issue id this entry may legitimately hold right now (for the stale sweep)."""
     covers, profiles = list(cover_ids), list(profile_ids)
-    ids = {f"missing_entity_{entry.entry_id}_{e}" for e in wanted_entities}
+    ids = {missing_entity_issue_id(entry.entry_id, e) for e in wanted_entities}
     ids.update(
         hub_issue_id(entry.entry_id, k)
         for k in (

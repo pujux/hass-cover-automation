@@ -690,6 +690,31 @@ class CoverAutomationController:
             any_wind and hs.wind_sensor_unavailable,
             translation_key="wind_sensor_unavailable",
         )
+        self._update_missing_entity_repairs()
+
+    def _update_missing_entity_repairs(self) -> None:
+        """Repair every optional entity that has no state right now (spec §5).
+
+        Every wanted entity is in `_watched`, so its removal or (re)appearance already fires a
+        state-change event and lands here on the next evaluation -- no reload needed, and a
+        sensor whose integration starts late is only flagged once the controller itself starts
+        (`async_at_started`).
+        """
+        missing: list[str] = []
+        for entity_id in repairs.optional_entity_ids(self.hub, self._covers):
+            absent = self.hass.states.get(entity_id) is None
+            repairs.set_issue(
+                self.hass,
+                repairs.missing_entity_issue_id(self.entry.entry_id, entity_id),
+                absent,
+                translation_key="missing_entity",
+                placeholders={"entity_id": entity_id},
+            )
+            if absent:
+                missing.append(entity_id)
+        data = getattr(self.entry, "runtime_data", None)
+        if data is not None:
+            data.missing_entities = missing
 
     def _update_cover_repairs(self, cover_id: str, sig: CoverSignalSet) -> None:
         name, engine = self.cover_names[cover_id], self._engines[cover_id]

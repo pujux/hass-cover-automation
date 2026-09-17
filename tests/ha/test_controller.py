@@ -865,3 +865,30 @@ async def test_midnight_rollover_clears_hot_day_and_refetches_the_forecast(
         assert controller.hub_view.hot_day is None
     finally:
         await controller.async_stop()
+
+
+async def test_missing_entity_repairs_follow_live_state(hass, hub_entry, cover_services):
+    """R1: an optional entity that disappears (or returns) is repaired without a reload."""
+    set_sensor(hass, "binary_sensor.door", "off", device_class="door")
+    controller, _sub_id = await start_controller(
+        hass, hub_entry, cover_overrides={const.CONF_DOOR_SENSOR: "binary_sensor.door"}
+    )
+    reg = ir.async_get(hass)
+    issue_id = f"missing_entity_{hub_entry.entry_id}_binary_sensor.door"
+    try:
+        assert reg.async_get_issue(const.DOMAIN, issue_id) is None
+        assert hub_entry.runtime_data.missing_entities == []
+
+        hass.states.async_remove("binary_sensor.door")
+        await hass.async_block_till_done()
+        issue = reg.async_get_issue(const.DOMAIN, issue_id)
+        assert issue is not None and issue.translation_key == "missing_entity"
+        assert issue.translation_placeholders == {"entity_id": "binary_sensor.door"}
+        assert hub_entry.runtime_data.missing_entities == ["binary_sensor.door"]
+
+        set_sensor(hass, "binary_sensor.door", "off", device_class="door")
+        await hass.async_block_till_done()
+        assert reg.async_get_issue(const.DOMAIN, issue_id) is None
+        assert hub_entry.runtime_data.missing_entities == []
+    finally:
+        await controller.async_stop()
