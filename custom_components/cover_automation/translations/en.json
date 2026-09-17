@@ -443,7 +443,7 @@
       "title": "Schedule profile is missing"
     },
     "quiet_conflict": {
-      "description": "On {cover}, another of its schedule profiles is in quiet hours when {rules} would fire, so {rules} never acts. Move the rule outside those quiet hours, or take one of the profiles off this cover.",
+      "description": "On {cover}, another of its schedule profiles is in quiet hours when {rules} would fire, so nothing happens for as long as those quiet hours last — and an open rule's single attempt can expire in the meantime. Move the rule outside those quiet hours, or take one of the profiles off this cover.",
       "title": "A schedule rule is blocked by another profile's quiet hours"
     },
     "room_sensor_unusable": {

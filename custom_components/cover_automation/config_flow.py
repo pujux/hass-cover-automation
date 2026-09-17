@@ -380,15 +380,27 @@ def merge_unpickable_profiles(
     A profile whose enable switch is not in the entity registry -- it is misconfigured and
     skipped at setup, or the entry has not been set up since it was added -- cannot appear in
     the picker, so saving the form would silently drop a reference that still works. Those ids
-    are re-inserted at the position they had, as long as their subentry still exists; ids
-    whose subentry is gone stay dropped.
+    are re-inserted as long as their subentry still exists; ids whose subentry is gone stay
+    dropped.
+
+    The insertion point is anchored on **surviving neighbours**, not on the stored index: order
+    is priority here, and an index from the old list means nothing in the new one. Reusing it
+    would let an unrelated edit -- removing a profile above the rescued one, or adding one at
+    the top -- silently move the rescued profile past a neighbour it used to rank below. So the
+    rescued id goes immediately after the last stored profile that precedes it and survived,
+    and to the front when none of its predecessors did.
     """
     pickable = set(profile_switch_entity_ids(hass, entry))
     known = {sub.subentry_id for sub in entry.get_subentries_of_type(const.SUBENTRY_PROFILE)}
     merged = list(picked)
-    for index, profile_id in enumerate(stored):
-        if profile_id in known and profile_id not in pickable and profile_id not in merged:
-            merged.insert(min(index, len(merged)), profile_id)
+    for position, profile_id in enumerate(stored):
+        if profile_id not in known or profile_id in pickable or profile_id in merged:
+            continue
+        anchor = -1  # nothing above it survived: it goes back to the top
+        for predecessor in stored[:position]:
+            if predecessor in merged:
+                anchor = merged.index(predecessor)
+        merged.insert(anchor + 1, profile_id)
     return merged
 
 

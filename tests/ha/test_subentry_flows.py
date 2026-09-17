@@ -778,3 +778,67 @@ async def test_reconfigure_still_drops_a_profile_whose_subentry_is_gone(
     result = await hass.config_entries.subentries.async_configure(result["flow_id"], COVER_INPUT)
     assert result["type"] is FlowResultType.ABORT
     assert hub_entry.subentries[cover_sub.subentry_id].data[const.CONF_SCHEDULE_PROFILES] == []
+
+
+async def _reconfigure_with_profiles(hass, hub_entry, stored_names, unpickable, picked_names):
+    """Set up profiles by name, store a cover referencing `stored_names`, reconfigure it with
+    `picked_names` selected, and return the saved profile id list as names."""
+    set_weather(hass)
+    set_cover(hass, "cover.bedroom")
+    ids: dict[str, str] = {}
+    for name in dict.fromkeys([*stored_names, *picked_names]):
+        hass.config_entries.async_add_subentry(
+            hub_entry, config_entries.ConfigSubentry(**profile_subentry_data(name))
+        )
+        sub = next(
+            s
+            for s in hub_entry.subentries.values()
+            if s.subentry_type == const.SUBENTRY_PROFILE and s.title == name
+        )
+        ids[name] = sub.subentry_id
+    switches = {
+        name: register_profile_switch(hass, hub_entry, sub_id)
+        for name, sub_id in ids.items()
+        if name not in unpickable
+    }
+    hass.config_entries.async_add_subentry(
+        hub_entry,
+        config_entries.ConfigSubentry(
+            **cover_subentry_data("cover.bedroom", schedule_profiles=[ids[n] for n in stored_names])
+        ),
+    )
+    cover_sub = next(
+        s for s in hub_entry.subentries.values() if s.subentry_type == const.SUBENTRY_COVER
+    )
+    result = await hass.config_entries.subentries.async_init(
+        (hub_entry.entry_id, const.SUBENTRY_COVER),
+        context={"source": config_entries.SOURCE_RECONFIGURE, "subentry_id": cover_sub.subentry_id},
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {**COVER_INPUT, const.CONF_SCHEDULE_PROFILES: [switches[n] for n in picked_names]},
+    )
+    assert result["type"] is FlowResultType.ABORT
+    by_id = {sub_id: name for name, sub_id in ids.items()}
+    saved = hub_entry.subentries[cover_sub.subentry_id].data[const.CONF_SCHEDULE_PROFILES]
+    return [by_id[sub_id] for sub_id in saved]
+
+
+async def test_rescued_profile_keeps_its_rank_when_a_predecessor_is_removed(
+    hass: HomeAssistant, hub_entry
+) -> None:
+    """G1: order is priority. Unpicking Night must not drop Broken below Day."""
+    saved = await _reconfigure_with_profiles(
+        hass, hub_entry, ["Night", "Broken", "Day"], {"Broken"}, ["Day"]
+    )
+    assert saved == ["Broken", "Day"]
+
+
+async def test_rescued_profile_keeps_its_rank_when_a_profile_is_added_in_front(
+    hass: HomeAssistant, hub_entry
+) -> None:
+    """G1: adding a profile at the top must not lift a rescued one above its old neighbour."""
+    saved = await _reconfigure_with_profiles(
+        hass, hub_entry, ["Night", "Broken"], {"Broken"}, ["New", "Night"]
+    )
+    assert saved == ["New", "Night", "Broken"]

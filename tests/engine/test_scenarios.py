@@ -623,3 +623,40 @@ def test_p2_a_spent_open_rule_is_not_re_asserted_by_a_second_profile():
     closed_at = len(sim.commands)
     sim.until("2026-07-01", "07:14")  # still inside the 15-minute open-rule window
     assert sim.actual is CoverState.CLOSED and len(sim.commands) == closed_at
+
+
+def test_p3_two_profiles_open_rules_each_keep_their_own_shot():
+    """G3: `open_rule_satisfied` holds one entry per profile, and neither re-fires.
+
+    Morning opens at 07:00 and Late at 07:05. The cover is observed open in between, so both
+    one shots are spent -- if they shared a single marker, the second rule would either
+    overwrite the first or re-assert itself when shading closes the cover again.
+    """
+    morning = Profile("morning", "Morning", (OPEN_0700,))
+    late = Profile("late", "Late", (Rule(RuleAction.OPEN, TimeMode.FIXED, time=t("07:05")),))
+    sim = Sim(
+        CFG,
+        at("2026-07-01", "06:55"),
+        profiles=(morning, late),
+        actual=CoverState.CLOSED,
+        persisted=CoverPersisted(owner=Owner.ENGINE, engine_target=Target.CLOSED),
+    )
+    sim.night()  # no shading opinion at all: only the two open rules act
+    sim.until("2026-07-01", "07:02")
+    assert sim.actual is CoverState.OPEN
+    # Morning's shot for today is spent; Late's entry still points at yesterday's firing
+    assert sim.engine.rt.open_rule_satisfied["morning"] == at("2026-07-01", "07:00")
+    assert sim.engine.rt.open_rule_satisfied["late"] == at("2026-06-30", "07:05")
+
+    sim.until("2026-07-01", "07:07")  # Late's rule fires while the cover is already open
+    assert sim.engine.rt.open_rule_satisfied == {
+        "morning": at("2026-07-01", "07:00"),
+        "late": at("2026-07-01", "07:05"),
+    }
+
+    sim.day(hits=True)  # hot sunlit morning: shading closes it inside both windows
+    sim.until("2026-07-01", "07:12")
+    assert sim.actual is CoverState.CLOSED
+    commands = len(sim.commands)
+    sim.until("2026-07-01", "07:19")  # past both 15-minute windows, still no re-open
+    assert sim.actual is CoverState.CLOSED and len(sim.commands) == commands

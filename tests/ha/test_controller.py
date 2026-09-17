@@ -1335,13 +1335,17 @@ async def test_switching_a_profile_off_hands_the_cover_to_the_next_one(
         assert controller.hub_view.next_event_profile == "Vacation"
 
         # switching it back on re-applies the hold and re-arms, no reload involved
+        armed_for_vacation = controller._schedule._unsub
+        assert armed_for_vacation is not None
         await controller.async_set_profile_enabled(evening_id, True)
         await hass.async_block_till_done()
         assert controller.profile_enabled[evening_id] is True
         assert controller._store.data.profiles[evening_id] is True
         assert len(cover_services["close"]) == 2  # Evening's hold is back
         assert "Evening" in (controller.cover_views[sub_id].active_rule or "")
+        # a genuinely new timer, not the one that was already armed for Vacation
         assert controller._schedule._unsub is not None
+        assert controller._schedule._unsub is not armed_for_vacation
         assert controller.hub_view.next_event_profile == "Evening"
     finally:
         await controller.async_stop()
