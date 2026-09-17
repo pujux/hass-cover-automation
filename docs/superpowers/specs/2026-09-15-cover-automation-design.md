@@ -1,6 +1,6 @@
 # Cover Automation Integration — Design Spec
 
-Date: 2026-09-15. Revision 3.7 (after two review rounds, the engine implementation's whole-branch review, the HA-binding final fix wave, see `docs/reviews/`, and the engine follow-up that made in-flight duplicate suppression a gate condition, §1.3 gate 7, the v0.2.0 robustness follow-up: live missing-entity repairs, a persisted minimum-interval clock and a cached sun position, the v0.3.0 `release` rule action, decision 33, and the v0.4.0 wind protection override entity, decision 34).
+Date: 2026-09-15. Revision 3.8 (after two review rounds, the engine implementation's whole-branch review, the HA-binding final fix wave, see `docs/reviews/`, and the engine follow-up that made in-flight duplicate suppression a gate condition, §1.3 gate 7, the v0.2.0 robustness follow-up: live missing-entity repairs, a persisted minimum-interval clock and a cached sun position, the v0.3.0 `release` rule action, decision 33, the v0.4.0 wind protection override entity, decision 34, and the v0.5.0 multiple schedule profiles per cover, decision 35).
 Related: `docs/design-decisions.md` (decision log, #1–#34), `docs/feature-selection.md`,
 `docs/reference/smart-cover-automation-analysis.md`.
 
@@ -86,8 +86,18 @@ bottom; the first layer with an opinion sets the desired state.
 3. **Door.** Door sensor `on` → `open`. Door sensor `unavailable`/`unknown` →
    `leave_alone` (never close on a dead sensor; never force open either) plus a repair
    issue. Nothing below this layer may close a cover on an open door.
-4. **Quiet hours** (from the cover's profile) → `leave_alone`.
-5. **Schedule** (decisions 13 and 33). Three rule kinds:
+4. **Quiet hours** → `leave_alone`. A cover's quiet hours are the **union** of its enabled
+   profiles' quiet hours: a profile asking for quiet is respected whatever its rank.
+5. **Schedule** (decisions 13, 33 and 35). A cover references an **ordered list** of schedule
+   profiles, first = highest priority. Each profile is evaluated on its own and the **first
+   one with an opinion** (`closed` or `open`) decides; a profile that is released, silent or
+   switched off simply hands the decision down. When no profile has an opinion the layer
+   yields `leave_alone` and the layers below decide, while the display fields (`active_rule`)
+   still name the highest-priority profile that has fired at all. A profile whose enable
+   switch is off is removed before any of this: it has no opinion, no quiet hours and arms
+   no timer. Overlapping holds therefore compose -- a cover stays shut until the *last*
+   hold covering it releases -- without building a bespoke merged profile.
+   Within one profile there are three rule kinds:
    - A **close rule** that fired at T holds `closed` until the next rule of the profile
      fires or until `manual_move_at > T` (decision 22; `manual_move_at` is written only by
      manual moves and never cleared, so a release is sticky until the next rule).
@@ -95,14 +105,17 @@ bottom; the first layer with an opinion sets the desired state.
      not yet been observed open since T, for at most 15 minutes after T, and only until the
      next rule fires or `manual_move_at > T`. Once the cover has been observed open the rule
      is satisfied and has no further opinion, so a later shading close is not undone
-     (decision 24). The satisfied marker is runtime-only; a restart within the 15-minute
-     window while the cover is closed may re-open it once.
+     (decision 24). The satisfied marker is runtime-only and kept **per profile**, so two
+     profiles' open rules never consume each other's one shot; it is only written for the
+     profile that actually won. A restart within the 15-minute window while the cover is
+     closed may re-open it once.
    - A **release rule** that fired at T ends the hold without an opinion of its own
      (`leave_alone`): the layers below decide, so shading may keep the cover closed and
      otherwise the engine reopens it because it owns the closed state the schedule created.
      Unlike an open rule it forces nothing, so shading never has to undo it (decision 33).
-   - Any rule firing clears `dam` and `dam_layer` for every cover of the profile (schedules
-     are authoritative, decision 10), even when the desired state does not change.
+   - Any rule firing clears `dam` and `dam_layer` for every cover that references the profile
+     (schedules are authoritative, decision 10), even when the desired state does not change
+     and even when a higher-priority profile is the one holding.
    - Two consecutive close rules are legal and act as a re-close (documented escape hatch).
    - A fixed-time rule inside its own profile's quiet hours is rejected at config time. A
      sun-relative rule that lands inside quiet hours on a given day is **clamped** (close
@@ -323,9 +336,11 @@ Subentry add/update/remove all notify the same listener.
 platforms are forwarded. Hub device: `identifiers={(DOMAIN, entry.entry_id)}`,
 `config_subentry_id=None`, `entry_type=SERVICE`. One device per cover subentry:
 `identifiers={(DOMAIN, subentry_id)}`, `config_subentry_id=subentry_id`,
-`via_device_id=<hub device id>` (never the deprecated `via_device`). Hub entities are added
-without a subentry id; per-cover entities with their subentry id; a hub entity never declares
-a cover device. Device lookups are always `config_entry_id`-scoped. Deleting a cover
+`via_device_id=<hub device id>` (never the deprecated `via_device`), model `Cover`. One device
+per **profile** subentry the same way, model `Schedule profile`, so a profile's enable switch
+has a device of its own. Hub entities are added
+without a subentry id; per-cover and per-profile entities with their subentry id; a hub entity
+never declares a cover device. Device lookups are always `config_entry_id`-scoped. Deleting a cover
 subentry removes its device and entities automatically.
 
 **Hub entry** (two-step config flow; hub options editable later):
@@ -346,8 +361,10 @@ is accepted and re-checked at every setup with the §4 repair issue as fallback)
 `room_only` | `either`); `room_temperature_sensor` (optional; required for `room_only`);
 `comfort_floor` (21 °C) < `comfort_ceiling` (25 °C); `door_sensor` (optional); wind block
 only if the hub has a wind sensor: `wind_enabled`, `wind_upper` > `wind_lower`, `wind_hold`
-(15 min), `wind_action` (open|hold); `schedule_profile` (select over
-`entry.get_subentries_of_type("profile")`, value = `subentry_id`, plus an explicit "none");
+(15 min), `wind_action` (open|hold); `schedule_profiles` (an **ordered list** of profile
+subentry ids, highest priority first, empty = no schedule; rendered as a multi-select,
+reorderable `EntitySelector` restricted to the profiles' `profile_enabled` switches and
+converted back through the entity registry's `config_subentry_id` on save);
 `min_move_interval` (10 min); `confirm_window` (120 s; must exceed the cover's travel time).
 Enabled and mode are runtime state (§5), not subentry data.
 
@@ -357,14 +374,20 @@ handler: `{action: close|open|release, time_mode: fixed|sunrise|sunset, time (fi
 offset_minutes (sun-relative), earliest?, latest? (clamps for sun-relative rules)}`;
 optional `quiet_hours {start, end}` (may span midnight). Validation: fixed rule times
 outside quiet hours; `fixed` requires `time`, sun-relative requires `offset_minutes`; a
-`release` rule needs a `close` rule in the same profile to release.
+`release` rule needs a `close` rule in the same profile to release. A profile also owns a
+`profile_enabled` switch (§4): switching it off silences the profile for every cover at once.
+
+**Backwards compatibility (no migration):** covers written before v0.5.0 carry a single
+`schedule_profile` key holding `"none"` or one subentry id. That key stays readable and is
+mapped to a zero- or one-element list; `schedule_profiles` wins whenever it is present, even
+when empty. Reconfiguring a cover rewrites it to the list key and drops the old one.
 
 **Entity references** (`cover_entity`, `door_sensor`, `room_temperature_sensor`, hub
 sensors) are followed automatically: the integration subscribes to
 `EVENT_ENTITY_REGISTRY_UPDATED` and rewrites the stored entity id when `old_entity_id`
 matches. Entry data carries `version`/`minor_version`; migrations run once via
-`async_migrate_entry`. A cover referencing a deleted profile behaves as if it had none and
-raises a repair issue.
+`async_migrate_entry`. A cover referencing a deleted profile drops just that id from its list
+-- the remaining profiles keep deciding in their own order -- and raises a repair issue.
 
 ## 4. Entities, services, observability
 
@@ -380,6 +403,12 @@ integration logger to DEBUG while on; a `logger:` YAML entry overrides); binary 
 is open, driven by the issue-registry update event); sensors [DIAGNOSTIC]
 `forecast_max_today`, `forecast_min_today`, `next_scheduled_event` (timestamp; attributes
 profile, action, covers); button `evaluate_now` [CONFIG].
+
+**Per-profile device:** switch `profile_enabled` ("Schedule enabled", **no category**): while
+off the profile has no opinion for any cover, contributes no quiet hours and arms no timer, so
+the next profile down (or the layers below) decides. It is deliberately uncategorised: the
+cover flow's profile picker selects profiles by this very entity, and it is a control the user
+reaches for from a dashboard.
 
 **Per-cover device:** switch `enabled` [CONFIG]; select `mode` (auto | dark_only |
 protection_only) [CONFIG]; sensor `status` (enum, **no category**, see services) with
@@ -427,18 +456,20 @@ snapshot, persisted state. Nothing to redact.
 
 ## 5. Persistence, startup, error handling
 
-**Store** (`Store(version=1, minor_version=2)` with a migration function; one per hub
+**Store** (`Store(version=1, minor_version=3)` with a migration function; one per hub
 entry; saved immediately on every command send and ownership change, delayed 1 s for
 everything else, immediately on unload, removed on entry removal):
 - Per cover, nine scalars: `owner`, `engine_target`, `manual_move_at`,
   `desired_at_manual_move`, `dam_layer`, `wind_active`, `enabled`, `mode`, `last_send_at`
   (the minimum-interval clock, decision 32).
+- Per profile: `enabled` (minor version 3; a missing key means on, so a minor-2 store loads
+  unchanged). Records of deleted profile subentries are pruned at setup like cover records.
 - Hub: forecast latch `{date, max, min, hot_day}`; `shading_mode`, `reopening_mode`,
   `simulation_mode`, `verbose_logging`.
 - Entities are views over engine state and write through the engine (decision 17).
 - Recomputed, never stored: sunny debounce, frost, sun hits, room hysteresis and dwell,
-  override dwell timer, command backoff, schedule hold/release, open-rule satisfied marker,
-  pending records (after a
+  override dwell timer, command backoff, schedule hold/release, open-rule satisfied markers
+  (one per profile), pending records (after a
   restart a command in flight is represented by `owner == engine AND engine_target ≠
   actual` and is resolved by reconcile).
 

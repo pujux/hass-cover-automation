@@ -33,9 +33,13 @@ provides a daily forecast.
    needs a hub wind sensor, because without one no cover has wind protection to force.
 2. **Schedule profiles** (optional): Add a *schedule profile* subentry with up to four rules
    (close at a time or relative to sunset, open once at a time or relative to sunrise, or
-   release an earlier close back to the automation) and optional quiet hours.
+   release an earlier close back to the automation) and optional quiet hours. Each profile
+   gets its own device and a *Schedule enabled* switch, so a whole profile can be switched
+   off for every cover at once.
 3. **Covers**: Add one *cover* subentry per cover: window azimuth and sun tolerances, shading
-   rule, room temperature sensor, door sensor, wind thresholds and a schedule profile.
+   rule, room temperature sensor, door sensor, wind thresholds and its schedule profiles. The
+   profile field takes **several profiles in priority order** — drag the most important one to
+   the top.
 
 Every subentry can be edited on its own from the integration page.
 
@@ -51,9 +55,14 @@ first one with an opinion wins:
    protection override entity forces the same thing while it is on.
 3. **Door** — while the door/window sensor of a cover is open, the cover is not closed.
 4. **Quiet hours** — inside a profile's quiet hours the automation does not move the cover.
+   A cover with several profiles is quiet while *any* of them asks for quiet.
 5. **Schedule** — a profile's close rule holds the cover closed until the next rule; an
    open rule is one-shot and gives up once the cover is open or its window has passed; a
    release rule ends the hold without moving anything, leaving the decision to shading.
+   With several profiles the **first one with something to say decides**, in the order you
+   put them in. A profile that has released, has nothing to say right now, or is switched
+   off hands the decision to the next one down. So two overlapping holds simply add up: the
+   cover stays closed until the last hold covering it releases.
 6. **Shading** — on a hot day, while the sun actually hits the window and the room calls for
    it, the cover closes; it reopens when the sun leaves the window or the day cools off.
 
@@ -92,6 +101,11 @@ Per cover:
 - `switch` (config): *Automation enabled*.
 - `button` (config): *Reset override*.
 
+Per schedule profile:
+
+- `switch`: *Schedule enabled* — while it is off the profile has no say for any cover, and
+  the next profile down (or the automation below) decides instead.
+
 ## Services
 
 - `cover_automation.reset_override` — clears the manual override on the targeted covers.
@@ -114,6 +128,23 @@ additionally raises the integration's own logger to debug level, which logs the 
 per-evaluation reasoning to the Home Assistant log.
 
 ## Release notes
+
+### v0.5.0
+
+- A cover can now reference **several schedule profiles in priority order** instead of one.
+  The first profile with something to say decides; one that has released, is silent or is
+  switched off hands the decision down. Overlapping holds therefore add up — a bedroom
+  profile that closes at sunset and releases at 06:00, plus a "Vacation" profile that holds
+  until 09:00, keeps the cover shut until 09:00 — without hand-building a merged profile.
+  Quiet hours are the union of all of a cover's profiles.
+- Every schedule profile gets its own device and a **Schedule enabled** switch. Switch
+  "Vacation" off and it stops having an opinion for every cover at once; switch it back on
+  and everything is exactly as it was. The switch is a normal, pickable entity, so it can go
+  straight on a dashboard.
+- The cover form's profile field is a reorderable multi-select: drag the most important
+  profile to the top.
+- Existing covers are untouched. The old single-profile setting keeps working as it is and
+  no migration runs; a cover is only rewritten to the new list when you reconfigure it.
 
 ### v0.4.0
 
