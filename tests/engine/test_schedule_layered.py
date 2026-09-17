@@ -11,6 +11,7 @@ from custom_components.cover_automation.engine.schedule import (
     Rule,
     RuleAction,
     TimeMode,
+    quiet_conflicts,
     view_layered,
 )
 
@@ -143,3 +144,71 @@ def test_layered_view_honours_an_explicit_timezone():
     v = view_layered((p,), utc, SUN, CoverState.OPEN, None, {}, tz=TZ)
     assert v.quiet_active and v.rule_fired_at == at("2026-07-01", "21:00")
     assert v.desired is Desired.CLOSED and v.profile_id == "p"
+
+
+def test_every_profiles_open_rule_is_reported_for_marking():
+    """F1: the satisfied markers must be written for every profile whose open rule has fired,
+    not only the winner -- otherwise a spent one shot fires again inside its window."""
+    a = Profile("a", "A", (close_at("20:00"), release_at("06:00")))
+    b = Profile("b", "B", (open_at("07:00"),))
+    c = Profile("c", "C", (open_at("07:01"),))
+    now = at("2026-07-01", "07:05")
+    # cover already open: no profile has an opinion and A wins the display fallback
+    v = view_layered((a, b, c), now, SUN, CoverState.OPEN, None, {})
+    assert v.desired is Desired.LEAVE_ALONE and v.profile_id == "a"
+    assert v.open_rule_fired_at is None  # the winner is A, whose last rule is a release
+    assert v.open_rules_fired == (
+        ("b", at("2026-07-01", "07:00")),
+        ("c", at("2026-07-01", "07:01")),
+    )
+    # a winner with its own open rule reports it in both places
+    won = view_layered((b, c), now, SUN, CoverState.CLOSED, None, {})
+    assert won.profile_id == "b" and won.open_rule_fired_at == at("2026-07-01", "07:00")
+    assert won.open_rules_fired == (
+        ("b", at("2026-07-01", "07:00")),
+        ("c", at("2026-07-01", "07:01")),
+    )
+    # nothing to mark when no open rule has fired at all
+    assert view_layered((a,), now, SUN, CoverState.OPEN, None, {}).open_rules_fired == ()
+
+
+def test_quiet_conflicts_finds_rules_swallowed_by_another_profiles_quiet_hours():
+    """F2: per-profile validation cannot see the union, so a cross-profile clash is silent."""
+    late = Profile("late", "Late", (close_at("23:00"),))
+    night = Profile("night", "Night", (), QuietHours(t("22:00"), t("07:00")))
+    day = date(2026, 7, 1)
+    assert quiet_conflicts((late, night), day, SUN, TZ) == [("late", 0)]
+    # each profile on its own is fine: a rule inside its OWN quiet hours is a config error
+    # the profile flow already refuses, and it is not this repair's business
+    assert quiet_conflicts((late,), day, SUN, TZ) == []
+    assert quiet_conflicts((night,), day, SUN, TZ) == []
+    # order does not matter: the union sits above the schedule layer either way
+    assert quiet_conflicts((night, late), day, SUN, TZ) == [("late", 0)]
+
+
+def test_quiet_conflicts_ignores_rules_outside_every_quiet_window():
+    early = Profile("early", "Early", (close_at("20:00"), open_at("08:00")))
+    night = Profile("night", "Night", (), QuietHours(t("22:00"), t("07:00")))
+    day = date(2026, 7, 1)
+    assert quiet_conflicts((early, night), day, SUN, TZ) == []
+    # a sun-relative rule is reported at its CLAMPED time, the one it would really fire at:
+    # sunset + 90 min = 22:30 is clamped by its own profile to 21:59, which is outside
+    sunset_close = Profile(
+        "sunset",
+        "Sunset",
+        (Rule(RuleAction.CLOSED, TimeMode.SUNSET, offset_minutes=90),),
+        QuietHours(t("22:00"), t("07:00")),
+    )
+    assert quiet_conflicts((sunset_close, night), day, SUN, TZ) == []
+    # widen the other profile's window and the clamped 21:59 does fall inside it
+    wider = Profile("wider", "Wider", (), QuietHours(t("21:00"), t("07:00")))
+    assert quiet_conflicts((sunset_close, wider), day, SUN, TZ) == [("sunset", 0)]
+
+
+def test_quiet_conflicts_reports_every_offending_rule_in_order():
+    a = Profile("a", "A", (close_at("23:00"), open_at("06:00")))
+    b = Profile("b", "B", (close_at("23:30"),), QuietHours(t("22:00"), t("07:00")))
+    day = date(2026, 7, 1)
+    # B's own 23:30 rule is invalid inside its OWN quiet hours, so it never fires and is not
+    # reported here; A's two rules both land in B's window
+    assert quiet_conflicts((a, b), day, SUN, TZ) == [("a", 0), ("a", 1)]

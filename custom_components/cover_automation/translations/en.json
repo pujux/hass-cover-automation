@@ -442,6 +442,10 @@
       "description": "Cover {cover} references a schedule profile that was deleted. It behaves as if it had no profile until you pick another one.",
       "title": "Schedule profile is missing"
     },
+    "quiet_conflict": {
+      "description": "On {cover}, another of its schedule profiles is in quiet hours when {rules} would fire, so {rules} never acts. Move the rule outside those quiet hours, or take one of the profiles off this cover.",
+      "title": "A schedule rule is blocked by another profile's quiet hours"
+    },
     "room_sensor_unusable": {
       "description": "{cover}'s room temperature sensor is unavailable or reporting an invalid value, so shading cannot use it.",
       "title": "Room temperature sensor is unusable"

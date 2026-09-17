@@ -442,6 +442,7 @@ class CoverAutomationController:
                 except Exception:  # per-cover isolation (spec §5)
                     _LOGGER.exception("Evaluation of cover %s failed", self.cover_names[cover_id])
         self._update_profile_repairs(at)
+        self._update_quiet_conflict_repairs(at)
         self._publish()
         self._store.schedule_save()
 
@@ -801,6 +802,28 @@ class CoverAutomationController:
             translation_key="command_failures",
             placeholders=placeholders,
         )
+
+    def _update_quiet_conflict_repairs(self, now: datetime) -> None:
+        """One `quiet_conflict` issue per cover (F2).
+
+        A cover's quiet hours are the union of its profiles' and that layer sits above the
+        schedule layer, so one profile's quiet window can swallow another's rule on the same
+        cover. Neither profile is wrong on its own, so the profile flow's per-profile
+        validation cannot see it and the cover would otherwise just silently never move.
+        """
+        for cover_id in self._covers:
+            conflicts = self._schedule.quiet_conflicts_today(cover_id, now)
+            label = ", ".join(
+                f"{self.profile_names.get(profile_id, profile_id)} rule {index + 1}"
+                for profile_id, index in conflicts
+            )
+            repairs.set_issue(
+                self.hass,
+                repairs.cover_issue_id(repairs.ISSUE_QUIET_CONFLICT, cover_id),
+                bool(conflicts),
+                translation_key="quiet_conflict",
+                placeholders={"cover": self.cover_names[cover_id], "rules": label},
+            )
 
     def _update_profile_repairs(self, now: datetime) -> None:
         """One `rule_skipped` issue per profile; the stale sweep only knows profile-scoped ids."""

@@ -1296,13 +1296,14 @@ async def test_overlapping_profile_holds_end_to_end(hass, hub_entry, cover_servi
 async def test_switching_a_profile_off_hands_the_cover_to_the_next_one(
     hass, hub_entry, cover_services, freezer
 ):
-    """A switched-off profile has no opinion: the next profile down decides instead."""
-    freezer.move_to(dt_util.now().replace(hour=22, minute=30, second=0, microsecond=0))
+    """A switched-off profile has no opinion: the next profile down decides instead, and
+    switching it back on re-applies its hold and re-arms the timers without a reload."""
+    freezer.move_to(dt_util.now().replace(hour=22, minute=0, second=0, microsecond=0))
     controller, sub_id = await start_controller(
         hass,
         hub_entry,
         forecast=TodayForecast(10.0, 5.0),
-        elevation=-10.0,
+        elevation=-10.0,  # night: only the schedule has an opinion
         profiles=[
             profile_subentry_data("Evening", rules=[_fixed("closed", "20:00:00")], quiet=None),
             profile_subentry_data("Vacation", rules=[_fixed("open", "22:25:00")], quiet=None),
@@ -1312,20 +1313,36 @@ async def test_switching_a_profile_off_hands_the_cover_to_the_next_one(
         evening_id, vacation_id = _subentry_ids(hub_entry, const.SUBENTRY_PROFILE)
         assert controller.profile_enabled == {evening_id: True, vacation_id: True}
         assert controller.profile_names[vacation_id] == "Vacation"
-        assert len(cover_services["close"]) == 1  # Evening's hold wins over Vacation's open rule
+        assert len(cover_services["close"]) == 1  # Evening's hold shuts it at startup
         set_cover(hass, "cover.bedroom", state="closed", position=0)
         await hass.async_block_till_done()
+
+        freezer.tick(timedelta(minutes=26))  # 22:26: Vacation's open rule fires
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+        assert not cover_services["open"]  # Evening outranks it and keeps the cover shut
+        assert "Evening" in (controller.cover_views[sub_id].active_rule or "")
 
         await controller.async_set_profile_enabled(evening_id, False)
         await hass.async_block_till_done()
         assert controller.profile_enabled[evening_id] is False
         assert controller._store.data.profiles[evening_id] is False
-        view = controller.cover_views[sub_id]
-        assert "Vacation" in (view.active_rule or "")
+        assert "Vacation" in (controller.cover_views[sub_id].active_rule or "")
         assert len(cover_services["open"]) == 1  # Vacation's open rule now decides
-
-        # and the hub's next planned event no longer mentions the silenced profile
+        set_cover(hass, "cover.bedroom", state="open", position=100)
+        await hass.async_block_till_done()
+        # the hub's next planned event no longer mentions the silenced profile
         assert controller.hub_view.next_event_profile == "Vacation"
+
+        # switching it back on re-applies the hold and re-arms, no reload involved
+        await controller.async_set_profile_enabled(evening_id, True)
+        await hass.async_block_till_done()
+        assert controller.profile_enabled[evening_id] is True
+        assert controller._store.data.profiles[evening_id] is True
+        assert len(cover_services["close"]) == 2  # Evening's hold is back
+        assert "Evening" in (controller.cover_views[sub_id].active_rule or "")
+        assert controller._schedule._unsub is not None
+        assert controller.hub_view.next_event_profile == "Evening"
     finally:
         await controller.async_stop()
 
@@ -1357,3 +1374,34 @@ async def test_profile_enabled_is_seeded_from_the_store_before_the_start_job(
     await reborn.async_set_profile_enabled(evening_id, True)
     assert reborn.profile_enabled[evening_id] is True
     assert reborn._schedule._unsub is None  # nothing armed: the controller never started
+
+
+async def test_quiet_conflict_repair(hass, hub_entry, cover_services, freezer):
+    """F2: one profile's quiet hours swallowing another's rule on the same cover is only
+    visible in the combination, so the repair is raised per cover -- and cleared again when
+    the quiet profile is switched off, because the union then no longer covers the rule."""
+    freezer.move_to(dt_util.now().replace(hour=12, minute=0, second=0, microsecond=0))
+    controller, sub_id = await start_controller(
+        hass,
+        hub_entry,
+        profiles=[
+            profile_subentry_data("Late", rules=[_fixed("closed", "23:00:00")], quiet=None),
+            profile_subentry_data(
+                "Night", rules=[_fixed("closed", "21:00:00")], quiet=("22:00:00", "07:00:00")
+            ),
+        ],
+    )
+    try:
+        registry = ir.async_get(hass)
+        issue_id = f"quiet_conflict_{sub_id}"
+        issue = registry.async_get_issue(const.DOMAIN, issue_id)
+        assert issue is not None and issue.translation_key == "quiet_conflict"
+        assert issue.translation_placeholders == {"cover": "Bedroom", "rules": "Late rule 1"}
+        # Night's own 21:00 rule is outside its own quiet hours, so it is not reported
+        night_id = _subentry_ids(hub_entry, const.SUBENTRY_PROFILE)[1]
+
+        await controller.async_set_profile_enabled(night_id, False)
+        await hass.async_block_till_done()
+        assert registry.async_get_issue(const.DOMAIN, issue_id) is None
+    finally:
+        await controller.async_stop()

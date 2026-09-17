@@ -70,7 +70,9 @@ def profile_ids(data: Mapping[str, Any]) -> tuple[str, ...]:
     one-element tuple. The list key wins whenever it is present, even when it is empty.
     """
     raw = data.get(const.CONF_SCHEDULE_PROFILES)
-    if raw is not None:
+    # A bare string is iterable: without the type check a hand-written `schedule_profiles:
+    # "abc"` would become three one-character profile ids instead of being ignored.
+    if isinstance(raw, list | tuple):
         return tuple(str(value) for value in raw if str(value))
     legacy = _opt_str(data, const.CONF_SCHEDULE_PROFILE, none_sentinel=True)
     return (legacy,) if legacy is not None else ()

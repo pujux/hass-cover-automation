@@ -293,3 +293,13 @@ def test_profile_list_wins_over_the_legacy_key():
         **{const.CONF_SCHEDULE_PROFILE: "prof1", const.CONF_SCHEDULE_PROFILES: []}
     )
     assert emptied.profile_ids == ()
+
+
+def test_profile_list_of_the_wrong_shape_is_ignored():
+    """A hand-written scalar must not become one profile id per character."""
+    assert _cover_with(**{const.CONF_SCHEDULE_PROFILES: "prof1"})[0].profile_ids == ()
+    # ... and it falls back to the legacy key rather than to garbage
+    cfg, _bind = _cover_with(
+        **{const.CONF_SCHEDULE_PROFILES: "prof1", const.CONF_SCHEDULE_PROFILE: "prof2"}
+    )
+    assert cfg.profile_ids == ("prof2",)

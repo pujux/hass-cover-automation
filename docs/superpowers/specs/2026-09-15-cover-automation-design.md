@@ -1,7 +1,7 @@
 # Cover Automation Integration — Design Spec
 
 Date: 2026-09-15. Revision 3.8 (after two review rounds, the engine implementation's whole-branch review, the HA-binding final fix wave, see `docs/reviews/`, and the engine follow-up that made in-flight duplicate suppression a gate condition, §1.3 gate 7, the v0.2.0 robustness follow-up: live missing-entity repairs, a persisted minimum-interval clock and a cached sun position, the v0.3.0 `release` rule action, decision 33, the v0.4.0 wind protection override entity, decision 34, and the v0.5.0 multiple schedule profiles per cover, decision 35).
-Related: `docs/design-decisions.md` (decision log, #1–#34), `docs/feature-selection.md`,
+Related: `docs/design-decisions.md` (decision log, #1–#35), `docs/feature-selection.md`,
 `docs/reference/smart-cover-automation-analysis.md`.
 
 ## 0. Scope
@@ -106,9 +106,11 @@ bottom; the first layer with an opinion sets the desired state.
      next rule fires or `manual_move_at > T`. Once the cover has been observed open the rule
      is satisfied and has no further opinion, so a later shading close is not undone
      (decision 24). The satisfied marker is runtime-only and kept **per profile**, so two
-     profiles' open rules never consume each other's one shot; it is only written for the
-     profile that actually won. A restart within the 15-minute window while the cover is
-     closed may re-open it once.
+     profiles' open rules never consume each other's one shot. It is written for **every**
+     profile whose open rule has fired, not only the one that won the merge: an open rule
+     falls silent the moment the cover is open, so the winner is then some other profile and
+     the one shot would otherwise never be recorded. A restart within the 15-minute window
+     while the cover is closed may re-open it once.
    - A **release rule** that fired at T ends the hold without an opinion of its own
      (`leave_alone`): the layers below decide, so shading may keep the cover closed and
      otherwise the engine reopens it because it owns the closed state the schedule created.
@@ -449,7 +451,11 @@ changed; weather unavailable beyond grace or forecast fetch failing; `sun.sun` m
 runtime; frost source unavailable; door sensor unavailable; configured cover, door or room
 sensor missing; `room_only` without usable room sensor; cover supports neither open/close
 nor position; cover references a deleted profile; sun-relative rule skipped because no
-quiet-hours clamp was possible; three consecutive command failures.
+quiet-hours clamp was possible; a rule of one of a cover's profiles falling inside **another**
+of that cover's quiet windows (per cover: rule-versus-quiet validation is per profile, but the
+quiet layer takes the union and sits above the schedule layer, so neither profile is wrong on
+its own and the cover would otherwise silently never move); three consecutive command
+failures.
 
 **Diagnostics** (`diagnostics.py`): hub config, all subentries, per-cover evaluation
 snapshot, persisted state. Nothing to redact.

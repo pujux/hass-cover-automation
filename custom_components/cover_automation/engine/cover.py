@@ -95,14 +95,12 @@ class CoverEngine:
         if cfg.wind_enabled and rt.prev_wind_active and not inputs.wind_active:
             rt.restoring_until = now + timedelta(seconds=RESTORING_WINDOW_S)
         rt.prev_wind_active = inputs.wind_active
-        sched = inputs.schedule
-        if (
-            sched.open_rule_fired_at is not None
-            and sched.profile_id is not None
-            and inputs.actual is CoverState.OPEN
-        ):
-            # Per profile: two profiles' open rules each get their own one shot.
-            rt.open_rule_satisfied[sched.profile_id] = sched.open_rule_fired_at
+        if inputs.actual is CoverState.OPEN:
+            # Every profile with a pending open rule, not just the one that won the merge:
+            # an open rule falls silent the moment the cover is open, so the winner is then
+            # some other profile and the one shot would never be recorded (decision 24).
+            for profile_id, fired_at in inputs.schedule.open_rules_fired:
+                rt.open_rule_satisfied[profile_id] = fired_at
         restoring = rt.restoring_until is not None and now < rt.restoring_until
 
         decision = layers.evaluate(cfg, p, inputs, signals, restoring=restoring)

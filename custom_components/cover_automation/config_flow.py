@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import voluptuous as vol
@@ -372,6 +372,26 @@ def profile_ids_from_entities(hass: HomeAssistant, entity_ids: Any) -> list[str]
     return out
 
 
+def merge_unpickable_profiles(
+    hass: HomeAssistant, entry: ConfigEntry, stored: Sequence[str], picked: list[str]
+) -> list[str]:
+    """Splice back the stored profiles the picker could not offer.
+
+    A profile whose enable switch is not in the entity registry -- it is misconfigured and
+    skipped at setup, or the entry has not been set up since it was added -- cannot appear in
+    the picker, so saving the form would silently drop a reference that still works. Those ids
+    are re-inserted at the position they had, as long as their subentry still exists; ids
+    whose subentry is gone stay dropped.
+    """
+    pickable = set(profile_switch_entity_ids(hass, entry))
+    known = {sub.subentry_id for sub in entry.get_subentries_of_type(const.SUBENTRY_PROFILE)}
+    merged = list(picked)
+    for index, profile_id in enumerate(stored):
+        if profile_id in known and profile_id not in pickable and profile_id not in merged:
+            merged.insert(min(index, len(merged)), profile_id)
+    return merged
+
+
 def cover_schema(
     hass: HomeAssistant, entry: ConfigEntry, defaults: Mapping[str, Any], unit: str
 ) -> vol.Schema:
@@ -554,8 +574,13 @@ class CoverSubentryFlow(ConfigSubentryFlow):
                 # The picker speaks entity ids; the stored shape is subentry ids in the
                 # picked order. The pre-0.5 single-profile key is never written again.
                 data.pop(const.CONF_SCHEDULE_PROFILE, None)
-                data[const.CONF_SCHEDULE_PROFILES] = profile_ids_from_entities(
-                    self.hass, user_input.get(const.CONF_SCHEDULE_PROFILES)
+                data[const.CONF_SCHEDULE_PROFILES] = merge_unpickable_profiles(
+                    self.hass,
+                    entry,
+                    profile_ids(current.data) if current is not None else (),
+                    profile_ids_from_entities(
+                        self.hass, user_input.get(const.CONF_SCHEDULE_PROFILES)
+                    ),
                 )
                 cover_state = self.hass.states.get(str(data[const.CONF_COVER_ENTITY]))
                 friendly = cover_state.name if cover_state else str(data[const.CONF_COVER_ENTITY])

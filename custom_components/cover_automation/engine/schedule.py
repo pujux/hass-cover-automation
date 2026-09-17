@@ -239,20 +239,69 @@ def view_layered(
     `satisfied` maps profile id to the fire time of that profile's already-satisfied open rule,
     so two profiles' open rules never consume each other's one shot. Only ENABLED profiles are
     passed in; this function knows nothing about enable state.
+
+    `open_rules_fired` collects every profile's pending open rule, not just the winner's: once
+    the cover is observed open the open rule falls silent and some other profile wins the
+    merge, and the engine still has to record that one shot as spent (decision 24).
     """
     if tz is not None:
         now = now.astimezone(tz)
     quiet = any(quiet_active(profile.quiet_hours, now) for profile in profiles)
+    opinions = [
+        (
+            profile,
+            view(profile, now, sun, actual, manual_move_at, satisfied.get(profile.profile_id)),
+        )
+        for profile in profiles
+    ]
+    open_rules = tuple(
+        (profile.profile_id, opinion.open_rule_fired_at)
+        for profile, opinion in opinions
+        if opinion.open_rule_fired_at is not None
+    )
     fallback: ScheduleView | None = None
-    for profile in profiles:
-        opinion = view(profile, now, sun, actual, manual_move_at, satisfied.get(profile.profile_id))
+    for profile, opinion in opinions:
+        merged = replace(
+            opinion,
+            quiet_active=quiet,
+            profile_id=profile.profile_id,
+            open_rules_fired=open_rules,
+        )
         if opinion.desired is not Desired.LEAVE_ALONE:
-            return replace(opinion, quiet_active=quiet, profile_id=profile.profile_id)
+            return merged
         if fallback is None and opinion.rule_fired_at is not None:
-            fallback = replace(opinion, quiet_active=quiet, profile_id=profile.profile_id)
+            fallback = merged
     if fallback is not None:
         return fallback
-    return ScheduleView(quiet_active=quiet)
+    return ScheduleView(quiet_active=quiet, open_rules_fired=open_rules)
+
+
+def quiet_conflicts(
+    profiles: Sequence[Profile], day: date, sun: SunTimes, tz: tzinfo
+) -> list[tuple[str, int]]:
+    """Rules of one profile that ANOTHER assigned profile's quiet hours would swallow.
+
+    Rule-versus-quiet validation is per profile, but a cover's quiet hours are the union of
+    its profiles' (spec §1.2 layer 4) and that layer sits above the schedule layer: a close
+    rule at 23:00 in profile A simply never acts while profile B, on the same cover, is quiet
+    from 22:00. Nothing in either profile is wrong on its own, so only the combination can be
+    reported -- the caller raises one repair per cover.
+
+    Each rule is judged at the time it would really fire, after its own profile's clamping;
+    a rule its own profile already skips or refuses is not reported.
+    """
+    out: list[tuple[str, int]] = []
+    for profile in profiles:
+        others = [p for p in profiles if p is not profile and p.quiet_hours is not None]
+        if not others:
+            continue
+        for index, rule in enumerate(profile.rules):
+            fire = fire_time(rule, day, sun, profile.quiet_hours, tz)
+            if fire is None:
+                continue
+            if any(quiet_active(other.quiet_hours, fire, tz=tz) for other in others):
+                out.append((profile.profile_id, index))
+    return out
 
 
 def _time_in_quiet(quiet: QuietHours | None, clock: time) -> bool:

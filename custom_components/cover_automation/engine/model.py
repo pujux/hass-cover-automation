@@ -265,8 +265,12 @@ class ScheduleView:
     rule_fired_at: datetime | None = None
     rule_index: int | None = None
     released: bool = False
-    open_rule_fired_at: datetime | None = None  # set while the last fired rule is an open rule
-    profile_id: str | None = None  # which profile produced this opinion (display, markers)
+    open_rule_fired_at: datetime | None = None  # the winner's, for display
+    profile_id: str | None = None  # which profile produced this opinion (display)
+    # (profile id, open rule fire time) for EVERY profile whose last fired rule is an open
+    # rule, winner or not: a one shot must be recorded as satisfied even when a
+    # higher-priority profile decides the merged view (decision 24).
+    open_rules_fired: tuple[tuple[str, datetime], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

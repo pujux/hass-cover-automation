@@ -23,6 +23,7 @@ ISSUE_DOOR_UNAVAILABLE = "door_sensor_unavailable"
 ISSUE_ROOM_UNUSABLE = "room_sensor_unusable"
 ISSUE_COVER_UNSUPPORTED = "cover_unsupported"
 ISSUE_RULE_SKIPPED = "rule_skipped"
+ISSUE_QUIET_CONFLICT = "quiet_conflict"
 ISSUE_COMMAND_FAILURES = "command_failures"
 
 _RUNTIME_KINDS = (
@@ -37,6 +38,7 @@ _RUNTIME_KINDS = (
     ISSUE_ROOM_UNUSABLE,
     ISSUE_COVER_UNSUPPORTED,
     ISSUE_RULE_SKIPPED,
+    ISSUE_QUIET_CONFLICT,
     ISSUE_COMMAND_FAILURES,
 )
 SETUP_PREFIXES = (
@@ -139,6 +141,7 @@ def entry_owned_issue_ids(
                 ISSUE_DOOR_UNAVAILABLE,
                 ISSUE_ROOM_UNUSABLE,
                 ISSUE_COVER_UNSUPPORTED,
+                ISSUE_QUIET_CONFLICT,
                 ISSUE_COMMAND_FAILURES,
             )
         )

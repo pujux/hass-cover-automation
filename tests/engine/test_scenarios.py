@@ -586,3 +586,40 @@ def test_p_two_profiles_with_overlapping_holds():
     assert sim.engine.rt.last_evaluation.layer is Layer.SHADING
     assert sim.actual is CoverState.OPEN
     assert sim.commands[-1][1:] == (Target.OPEN, Layer.SHADING)
+
+
+def test_p2_a_spent_open_rule_is_not_re_asserted_by_a_second_profile():
+    """Decision 24 across profiles: the one shot must be recorded whoever wins the merge.
+
+    Evening (a close rule that released at 06:00) sits above Morning (open at 07:00). Once
+    the cover is open the open rule has no opinion, so the merged view falls back to Evening
+    -- and if the satisfied marker were only written for the winner, a shading close inside
+    the 15-minute window would let the open rule fire a second time.
+    """
+    evening = Profile(
+        "evening",
+        "Evening",
+        (
+            Rule(RuleAction.CLOSED, TimeMode.FIXED, time=t("20:00")),
+            Rule(RuleAction.RELEASE, TimeMode.FIXED, time=t("06:00")),
+        ),
+    )
+    morning = Profile("morning", "Morning", (OPEN_0700,))
+    sim = Sim(
+        CFG,
+        at("2026-07-01", "06:55"),
+        profiles=(evening, morning),
+        actual=CoverState.CLOSED,
+        persisted=CoverPersisted(owner=Owner.ENGINE, engine_target=Target.CLOSED),
+    )
+    sim.day(hits=False)  # sun up but off the window: shading has nothing to say yet
+    sim.until("2026-07-01", "07:02")
+    assert sim.actual is CoverState.OPEN  # the open rule fired
+    assert sim.engine.rt.open_rule_satisfied == {"morning": at("2026-07-01", "07:00")}
+
+    sim.day(hits=True)  # hot, sunlit morning: shading closes it again inside the window
+    sim.until("2026-07-01", "07:12")
+    assert sim.actual is CoverState.CLOSED
+    closed_at = len(sim.commands)
+    sim.until("2026-07-01", "07:14")  # still inside the 15-minute open-rule window
+    assert sim.actual is CoverState.CLOSED and len(sim.commands) == closed_at

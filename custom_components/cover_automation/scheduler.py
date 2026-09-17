@@ -158,6 +158,15 @@ class ScheduleTracker:
         clock = f"{fired_at.astimezone(self.tz):%H:%M}"
         return f"{action} rule {rule_index + 1} of {profile.name} ({clock})"
 
+    def quiet_conflicts_today(self, cover_id: str, now: datetime) -> list[tuple[str, int]]:
+        """Rules of one of the cover's profiles that another one's quiet hours swallow.
+
+        Judged over the cover's ENABLED profiles only: quiet hours are the union of those, so
+        switching the quiet profile off really does let the other one's rule act again.
+        """
+        day = now.astimezone(self.tz).date()
+        return schedule.quiet_conflicts(self.enabled_profiles(cover_id), day, self.sun, self.tz)
+
     def skipped_rules_today(self, now: datetime) -> list[tuple[str, int]]:
         day = now.astimezone(self.tz).date()
         skipped: list[tuple[str, int]] = []

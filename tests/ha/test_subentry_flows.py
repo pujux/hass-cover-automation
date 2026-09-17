@@ -712,3 +712,69 @@ async def test_validation_error_keeps_the_picked_profiles(hass: HomeAssistant, h
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {const.CONF_COMFORT_FLOOR: "floor_not_below_ceiling"}
     assert _suggested(result, const.CONF_SCHEDULE_PROFILES) == [night_switch]
+
+
+async def test_reconfigure_keeps_a_profile_the_picker_cannot_offer(
+    hass: HomeAssistant, hub_entry
+) -> None:
+    """F3: a profile with no switch entity (misconfigured, so skipped at setup) cannot appear
+    in the picker; saving the form must not silently drop the reference."""
+    set_weather(hass)
+    set_cover(hass, "cover.bedroom")
+    for name in ("Broken", "Night"):
+        hass.config_entries.async_add_subentry(
+            hub_entry, config_entries.ConfigSubentry(**profile_subentry_data(name))
+        )
+    broken, night = (
+        s for s in hub_entry.subentries.values() if s.subentry_type == const.SUBENTRY_PROFILE
+    )
+    night_switch = register_profile_switch(hass, hub_entry, night.subentry_id)  # Broken has none
+    hass.config_entries.async_add_subentry(
+        hub_entry,
+        config_entries.ConfigSubentry(
+            **cover_subentry_data(
+                "cover.bedroom",
+                schedule_profiles=[broken.subentry_id, night.subentry_id],
+            )
+        ),
+    )
+    cover_sub = next(
+        s for s in hub_entry.subentries.values() if s.subentry_type == const.SUBENTRY_COVER
+    )
+    result = await hass.config_entries.subentries.async_init(
+        (hub_entry.entry_id, const.SUBENTRY_COVER),
+        context={"source": config_entries.SOURCE_RECONFIGURE, "subentry_id": cover_sub.subentry_id},
+    )
+    # only the resolvable profile is offered, at its own position
+    assert _suggested(result, const.CONF_SCHEDULE_PROFILES) == [night_switch]
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {**COVER_INPUT, const.CONF_SCHEDULE_PROFILES: [night_switch]}
+    )
+    assert result["type"] is FlowResultType.ABORT
+    updated = hub_entry.subentries[cover_sub.subentry_id]
+    assert updated.data[const.CONF_SCHEDULE_PROFILES] == [
+        broken.subentry_id,
+        night.subentry_id,
+    ]
+
+
+async def test_reconfigure_still_drops_a_profile_whose_subentry_is_gone(
+    hass: HomeAssistant, hub_entry
+) -> None:
+    """The F3 rescue is scoped to profiles that still exist: a deleted one stays dropped."""
+    set_weather(hass)
+    set_cover(hass, "cover.bedroom")
+    hass.config_entries.async_add_subentry(
+        hub_entry,
+        config_entries.ConfigSubentry(
+            **cover_subentry_data("cover.bedroom", schedule_profiles=["ghost_profile"])
+        ),
+    )
+    cover_sub = next(iter(hub_entry.subentries.values()))
+    result = await hass.config_entries.subentries.async_init(
+        (hub_entry.entry_id, const.SUBENTRY_COVER),
+        context={"source": config_entries.SOURCE_RECONFIGURE, "subentry_id": cover_sub.subentry_id},
+    )
+    result = await hass.config_entries.subentries.async_configure(result["flow_id"], COVER_INPUT)
+    assert result["type"] is FlowResultType.ABORT
+    assert hub_entry.subentries[cover_sub.subentry_id].data[const.CONF_SCHEDULE_PROFILES] == []
