@@ -343,7 +343,7 @@ async def test_profile_with_a_release_rule_but_no_close_rule_is_rejected(
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "invalid_rules"}
     assert (
-        "rule 1 (release) has no earlier close rule to release"
+        "rule 1 (release) has no close rule in this profile to release"
         in result["description_placeholders"]["problems"]
     )
 

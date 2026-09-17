@@ -237,13 +237,19 @@ def test_release_rule_ends_the_hold_without_an_opinion():
     # before the release rule the close hold still stands
     held = view(p, at("2026-07-02", "07:59"), SUN, CoverState.CLOSED, None)
     assert held.desired is Desired.CLOSED and held.rule_index == 0
-    v = view(p, at("2026-07-02", "09:00"), SUN, CoverState.CLOSED, manual_move_at=None)
+    # sampled inside the 15-minute open-rule window and with the cover closed, so an open
+    # rule in this slot would say `open`: only the release branch yields leave_alone here
+    v = view(p, at("2026-07-02", "08:05"), SUN, CoverState.CLOSED, manual_move_at=None)
     assert v.desired is Desired.LEAVE_ALONE
     assert v.rule_fired_at == at("2026-07-02", "08:00") and v.rule_index == 1
     assert not v.released and v.open_rule_fired_at is None
     # a manual move after the release rule still counts as a release (no behaviour change)
     v2 = view(
-        p, at("2026-07-02", "09:00"), SUN, CoverState.OPEN, manual_move_at=at("2026-07-02", "08:30")
+        p,
+        at("2026-07-02", "08:10"),
+        SUN,
+        CoverState.CLOSED,
+        manual_move_at=at("2026-07-02", "08:05"),
     )
     assert v2.released and v2.desired is Desired.LEAVE_ALONE
 
@@ -261,12 +267,12 @@ def test_release_rule_in_quiet_hours_is_clamped_like_an_open_rule():
 
 def test_release_rule_without_a_close_rule_is_flagged():
     assert validate(Profile("p", "p", (release_at("08:00"),), None)) == [
-        "rule 1 (release) has no earlier close rule to release"
+        "rule 1 (release) has no close rule in this profile to release"
     ]
     assert validate(Profile("p", "p", (close_at("21:30"), release_at("08:00")), None)) == []
     # an open rule is not a hold: it does not satisfy the release rule either
     assert validate(Profile("p", "p", (open_at("07:00"), release_at("08:00")), None)) == [
-        "rule 2 (release) has no earlier close rule to release"
+        "rule 2 (release) has no close rule in this profile to release"
     ]
 
 

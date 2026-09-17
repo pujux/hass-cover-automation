@@ -138,7 +138,8 @@ class ScheduleTracker:
         if last is None:
             return None
         fired_at, index = last
-        action = _RULE_VERB[profile.rules[index].action]
+        rule_action = profile.rules[index].action
+        action = _RULE_VERB.get(rule_action, rule_action.value)
         return f"{action} rule {index + 1} of {profile.name} ({fired_at.astimezone(self.tz):%H:%M})"
 
     def skipped_rules_today(self, now: datetime) -> list[tuple[str, int]]:

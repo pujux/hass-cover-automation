@@ -231,7 +231,7 @@ def validate(profile: Profile) -> list[str]:
     has_close = any(rule.action is RuleAction.CLOSED for rule in profile.rules)
     for n, rule in enumerate(profile.rules, start=1):
         if rule.action is RuleAction.RELEASE and not has_close:
-            problems.append(f"rule {n} (release) has no earlier close rule to release")
+            problems.append(f"rule {n} (release) has no close rule in this profile to release")
         if rule.time_mode is TimeMode.FIXED:
             if rule.time is None:
                 problems.append(f"rule {n} needs a time")

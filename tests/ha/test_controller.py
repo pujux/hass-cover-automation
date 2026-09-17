@@ -409,72 +409,71 @@ RELEASE_RULES = [
 ]
 
 
-async def bedroom_held_overnight(hass, hub_entry, cover_services, freezer):
-    """21:30: the close rule shuts the bedroom and the hold runs into the next morning."""
-    freezer.move_to(dt_util.now().replace(hour=21, minute=0, second=0, microsecond=0))
-    controller, sub_id = await start_controller(
-        hass,
-        hub_entry,
-        elevation=-10.0,  # night: only the schedule has an opinion
-        profile=profile_subentry_data("Bedroom", rules=RELEASE_RULES, quiet=None),
-    )
-    assert not cover_services["close"]
-    freezer.tick(timedelta(minutes=31))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
-    assert len(cover_services["close"]) == 1
-    set_cover(hass, "cover.bedroom", state="closed", position=0)
-    await hass.async_block_till_done()
-    assert controller.engine(sub_id).p.owner is Owner.ENGINE
-    return controller, sub_id
+@pytest.fixture
+async def bedroom_overnight(hass, hub_entry, cover_services, freezer):
+    """21:30: the close rule shuts the bedroom and the hold runs into the next morning.
+
+    Owns the controller for the whole test -- an assertion failure while setting the
+    scenario up must not leave a running controller (and its timers) behind -- and keeps
+    the forecast patched across the local-midnight refetch.
+    """
+    with patch(
+        "custom_components.cover_automation.controller.async_fetch_today",
+        AsyncMock(return_value=HOT),
+    ):
+        freezer.move_to(dt_util.now().replace(hour=21, minute=0, second=0, microsecond=0))
+        controller, sub_id = await start_controller(
+            hass,
+            hub_entry,
+            elevation=-10.0,  # night: only the schedule has an opinion
+            profile=profile_subentry_data("Bedroom", rules=RELEASE_RULES, quiet=None),
+        )
+        try:
+            assert not cover_services["close"]
+            freezer.tick(timedelta(minutes=31))
+            async_fire_time_changed(hass)
+            await hass.async_block_till_done()
+            assert len(cover_services["close"]) == 1
+            set_cover(hass, "cover.bedroom", state="closed", position=0)
+            await hass.async_block_till_done()
+            assert controller.engine(sub_id).p.owner is Owner.ENGINE
+            yield controller, sub_id
+        finally:
+            await controller.async_stop()
 
 
 async def test_release_rule_reopens_the_bedroom_when_nothing_wants_shade(
-    hass, hub_entry, cover_services, freezer
+    hass, cover_services, freezer, bedroom_overnight
 ):
     """Decision 33: at 08:00 the hold ends and the layers below open the cover again."""
-    with patch(
-        "custom_components.cover_automation.controller.async_fetch_today",
-        AsyncMock(return_value=HOT),
-    ):
-        controller, sub_id = await bedroom_held_overnight(hass, hub_entry, cover_services, freezer)
-        try:
-            freezer.tick(timedelta(hours=10, minutes=24))  # 07:55 the next morning
-            set_sun(hass, elevation=40.0, azimuth=0.0)  # sun up but off this window
-            async_fire_time_changed(hass)
-            await hass.async_block_till_done()
-            assert controller.cover_views[sub_id].status is Status.SCHEDULE_HOLD
-            assert not cover_services["open"]  # the hold outranks the shading layer
-            freezer.tick(timedelta(minutes=10))  # 08:05: the release rule has fired
-            async_fire_time_changed(hass)
-            await hass.async_block_till_done()
-            assert len(cover_services["open"]) == 1
-            view = controller.cover_views[sub_id]
-            assert view.status is Status.OPEN_NO_SHADE and view.winning_layer == "shading"
-            assert "release rule 2" in (view.active_rule or "")
-        finally:
-            await controller.async_stop()
+    controller, sub_id = bedroom_overnight
+    freezer.tick(timedelta(hours=10, minutes=24))  # 07:55 the next morning
+    set_sun(hass, elevation=40.0, azimuth=0.0)  # sun up but off this window
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert controller.cover_views[sub_id].status is Status.SCHEDULE_HOLD
+    assert not cover_services["open"]  # the hold outranks the shading layer
+    freezer.tick(timedelta(minutes=10))  # 08:05: the release rule has fired
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert len(cover_services["open"]) == 1
+    view = controller.cover_views[sub_id]
+    assert view.status is Status.OPEN_NO_SHADE and view.winning_layer == "shading"
+    assert "release rule 2" in (view.active_rule or "")
 
 
 async def test_release_rule_leaves_the_bedroom_shut_while_shading_wants_it(
-    hass, hub_entry, cover_services, freezer
+    hass, cover_services, freezer, bedroom_overnight
 ):
     """The same release rule sends nothing when the morning sun is on the window."""
-    with patch(
-        "custom_components.cover_automation.controller.async_fetch_today",
-        AsyncMock(return_value=HOT),
-    ):
-        controller, sub_id = await bedroom_held_overnight(hass, hub_entry, cover_services, freezer)
-        try:
-            freezer.tick(timedelta(hours=10, minutes=34))  # 08:05, hot and sunny
-            set_sun(hass, elevation=40.0, azimuth=180.0)  # sun straight on the window
-            async_fire_time_changed(hass)
-            await hass.async_block_till_done()
-            assert not cover_services["open"] and len(cover_services["close"]) == 1
-            view = controller.cover_views[sub_id]
-            assert view.status is Status.CLOSED_SHADING and view.winning_layer == "shading"
-        finally:
-            await controller.async_stop()
+    controller, sub_id = bedroom_overnight
+    freezer.tick(timedelta(hours=10, minutes=34))  # 08:05, hot and sunny
+    set_sun(hass, elevation=40.0, azimuth=180.0)  # sun straight on the window
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert not cover_services["open"] and len(cover_services["close"]) == 1
+    view = controller.cover_views[sub_id]
+    assert view.status is Status.CLOSED_SHADING and view.winning_layer == "shading"
 
 
 async def test_rule_skipped_repair(hass, hub_entry, cover_services, freezer):
