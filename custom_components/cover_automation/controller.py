@@ -272,6 +272,7 @@ class CoverAutomationController:
             hub.outdoor_temperature_sensor,
             hub.sunny_override_entity,
             hub.hot_override_entity,
+            hub.wind_override_entity,
             SUN_ENTITY,
         )
         for entity_id in hub_entities:
@@ -487,6 +488,9 @@ class CoverAutomationController:
         rule_fired: bool,
     ) -> None:
         engine, sig = self._engines[cover_id], self._signals[cover_id]
+        # The hub-wide storm switch is read once per evaluation and handed to the cover's
+        # signal set, which turns it into `wind_active` only where wind is configured.
+        sig.force_wind = self._hub_signals.wind_forced
         actual = await self._sync_actual(cover_id, now)
         if cover_id not in self._reconciled:
             if actual is CoverState.UNAVAILABLE:

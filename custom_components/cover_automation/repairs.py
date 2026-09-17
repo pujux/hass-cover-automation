@@ -71,6 +71,7 @@ def optional_entity_ids(
             hub.outdoor_temperature_sensor,
             hub.sunny_override_entity,
             hub.hot_override_entity,
+            hub.wind_override_entity,
         )
         if e
     ]

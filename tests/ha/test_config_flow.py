@@ -150,3 +150,23 @@ async def test_override_entities_accept_any_on_off_domain(hass: HomeAssistant, h
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert hub_entry.options[const.CONF_SUNNY_OVERRIDE_ENTITY] == "input_boolean.force_sunny"
     assert hub_entry.options[const.CONF_HOT_OVERRIDE_ENTITY] == "switch.force_hot"
+
+
+async def test_options_flow_stores_and_clears_the_wind_override(
+    hass: HomeAssistant, hub_entry
+) -> None:
+    """Julian's `Windschutz` helper is stored like the other overrides, and clearing drops it."""
+    set_weather(hass)
+    hass.states.async_set("input_boolean.windschutz", "off")
+    result = await hass.config_entries.options.async_init(hub_entry.entry_id)
+    posted = {k: v for k, v in hub_options().items() if k != const.CONF_TEMPERATURE_UNIT}
+    posted[const.CONF_WIND_OVERRIDE_ENTITY] = "input_boolean.windschutz"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], posted)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert hub_entry.options[const.CONF_WIND_OVERRIDE_ENTITY] == "input_boolean.windschutz"
+
+    result = await hass.config_entries.options.async_init(hub_entry.entry_id)
+    cleared = {k: v for k, v in hub_options().items() if k != const.CONF_TEMPERATURE_UNIT}
+    result = await hass.config_entries.options.async_configure(result["flow_id"], cleared)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert const.CONF_WIND_OVERRIDE_ENTITY not in hub_entry.options

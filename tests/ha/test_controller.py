@@ -1059,3 +1059,81 @@ async def test_start_without_a_sun_position_skips_every_cover(hass, hub_entry, c
         )
     finally:
         await controller.async_stop()
+
+
+WIND_OVERRIDE = "input_boolean.windschutz"
+WIND_COVER = {
+    const.CONF_WIND_ENABLED: True,
+    const.CONF_WIND_UPPER: 60,
+    const.CONF_WIND_LOWER: 50,
+    const.CONF_WIND_UNIT: "km/h",
+}
+
+
+def _configure_wind_override(hass, hub_entry, entity_id: str = WIND_OVERRIDE) -> None:
+    hass.config_entries.async_update_entry(
+        hub_entry, options={**hub_entry.options, const.CONF_WIND_OVERRIDE_ENTITY: entity_id}
+    )
+
+
+async def test_wind_override_forces_protection_and_defers_the_re_close(
+    hass, hub_entry, cover_services, freezer
+):
+    """The hub's storm switch opens a wind-enabled cover while the wind sensor stays calm."""
+    _configure_wind_override(hass, hub_entry)
+    hass.states.async_set(WIND_OVERRIDE, "off")
+    controller, sub_id = await start_controller(hass, hub_entry, cover_overrides=WIND_COVER)
+    try:
+        assert len(cover_services["close"]) == 1  # hot sunny day: shading closed it
+        set_cover(hass, "cover.bedroom", state="closed", position=0)
+        await hass.async_block_till_done()
+        assert controller.cover_views[sub_id].wind_state == "inactive"
+
+        hass.states.async_set(WIND_OVERRIDE, "on")
+        await hass.async_block_till_done()
+        assert len(cover_services["open"]) == 1
+        view = controller.cover_views[sub_id]
+        assert view.status is Status.PROTECTED_WIND and view.wind_active
+        assert view.wind_state == "forced" and controller.hub_view.any_wind_active
+
+        set_cover(hass, "cover.bedroom", state="open", position=100)
+        await hass.async_block_till_done()
+        hass.states.async_set(WIND_OVERRIDE, "off")
+        await hass.async_block_till_done()
+        view = controller.cover_views[sub_id]
+        assert view.wind_state == "inactive" and not view.wind_active
+        assert not controller.hub_view.any_wind_active
+        assert len(cover_services["close"]) == 1  # restoring window: no immediate re-close
+    finally:
+        await controller.async_stop()
+
+
+async def test_wind_override_leaves_a_cover_without_wind_protection_alone(
+    hass, hub_entry, cover_services
+):
+    _configure_wind_override(hass, hub_entry)
+    hass.states.async_set(WIND_OVERRIDE, "on")
+    controller, sub_id = await start_controller(hass, hub_entry)  # wind_enabled defaults to False
+    try:
+        assert len(cover_services["open"]) == 0
+        view = controller.cover_views[sub_id]
+        assert view.wind_state == "disabled" and not view.wind_active
+        assert not controller.hub_view.any_wind_active
+    finally:
+        await controller.async_stop()
+
+
+async def test_missing_wind_override_entity_raises_a_repair(hass, hub_entry, cover_services):
+    _configure_wind_override(hass, hub_entry)
+    controller, _sub_id = await start_controller(hass, hub_entry, cover_overrides=WIND_COVER)
+    reg = ir.async_get(hass)
+    issue_id = f"missing_entity_{hub_entry.entry_id}_{WIND_OVERRIDE}"
+    try:
+        issue = reg.async_get_issue(const.DOMAIN, issue_id)
+        assert issue is not None and issue.translation_key == "missing_entity"
+        assert issue.translation_placeholders == {"entity_id": WIND_OVERRIDE}
+        hass.states.async_set(WIND_OVERRIDE, "off")
+        await hass.async_block_till_done()
+        assert reg.async_get_issue(const.DOMAIN, issue_id) is None
+    finally:
+        await controller.async_stop()

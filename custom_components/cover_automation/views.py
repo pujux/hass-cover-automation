@@ -45,7 +45,7 @@ class CoverView:
     sunny: bool | None = None
     hot_day: bool | None = None
     room_state: str = "none"  # none | cold | comfortable | hot | degraded
-    wind_state: str = "disabled"  # disabled | inactive | active | unavailable
+    wind_state: str = "disabled"  # disabled | inactive | active | forced | unavailable
     active_rule: str | None = None
     next_planned_action: str | None = None
     next_planned_at: datetime | None = None

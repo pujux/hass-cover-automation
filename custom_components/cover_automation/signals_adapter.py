@@ -202,6 +202,18 @@ class HubSignalSource:
         return self._outdoor_c() is None
 
     @property
+    def wind_forced(self) -> bool:
+        """True while the hub's wind-protection override entity reports `on` (spec §2).
+
+        Only `on` forces: off, unavailable/unknown, a missing entity and no configured
+        entity all defer to the per-cover wind sensor reading. The override never disables
+        protection the wind sensor asks for.
+        """
+        if not self.hub.wind_override_entity:
+            return False
+        return _binary(self.hass.states.get(self.hub.wind_override_entity)) is True
+
+    @property
     def wind_sensor_unavailable(self) -> bool:
         if not self.hub.wind_sensor:
             return False
@@ -239,6 +251,8 @@ class CoverSignalSet:
             )
         self._room_flags: tuple[bool, bool, bool] = (False, False, False)
         self.wind_unit_current: str | None = None
+        # Set by the controller from `HubSignalSource.wind_forced` before every `inputs()`.
+        self.force_wind: bool = False
 
     def _room_temp_c(self) -> float | None:
         if not self.bind.room_sensor:
@@ -317,13 +331,22 @@ class CoverSignalSet:
         return bool(self.sun_hits.state)
 
     @property
+    def _forced(self) -> bool:
+        """The hub override forces this cover: it only applies where wind is configured."""
+        return self.force_wind and self.wind is not None
+
+    @property
     def wind_active(self) -> bool:
+        if self._forced:
+            return True
         return self.wind.active if self.wind is not None else False
 
     @property
     def wind_state(self) -> str:
         if self.wind is None:
             return "disabled"
+        if self._forced:
+            return "forced"
         if self.wind.unavailable:
             return "unavailable"
         return "active" if self.wind.active else "inactive"

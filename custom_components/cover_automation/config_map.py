@@ -29,6 +29,7 @@ class HubConfig:
     hot_low: float | None
     sunny_override_entity: str | None
     hot_override_entity: str | None
+    wind_override_entity: str | None
     sun_release_margin: float
     tolerance: float
     override_dwell_s: int
@@ -101,6 +102,7 @@ def hub_config(entry: ConfigEntry) -> HubConfig:
         else None,
         sunny_override_entity=_opt_str(opts, const.CONF_SUNNY_OVERRIDE_ENTITY),
         hot_override_entity=_opt_str(opts, const.CONF_HOT_OVERRIDE_ENTITY),
+        wind_override_entity=_opt_str(opts, const.CONF_WIND_OVERRIDE_ENTITY),
         sun_release_margin=float(
             opts.get(const.CONF_SUN_RELEASE_MARGIN, const.DEFAULT_SUN_RELEASE_MARGIN)
         ),

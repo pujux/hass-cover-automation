@@ -166,6 +166,10 @@ def thresholds_schema(defaults: Mapping[str, Any], temperature_unit: str) -> vol
                 const.CONF_HOT_OVERRIDE_ENTITY,
                 description={"suggested_value": d.get(const.CONF_HOT_OVERRIDE_ENTITY)},
             ): _entity(list(ON_OFF_DOMAINS)),
+            vol.Optional(
+                const.CONF_WIND_OVERRIDE_ENTITY,
+                description={"suggested_value": d.get(const.CONF_WIND_OVERRIDE_ENTITY)},
+            ): _entity(list(ON_OFF_DOMAINS)),
         }
     )
 
@@ -217,7 +221,12 @@ def _complete_options(user_input: Mapping[str, Any], unit: str) -> dict[str, Any
     }
     filled.update({k: v for k, v in user_input.items() if k in _HUB_OPTION_KEYS})
     filled = _clean_optional_entities(
-        filled, (const.CONF_SUNNY_OVERRIDE_ENTITY, const.CONF_HOT_OVERRIDE_ENTITY)
+        filled,
+        (
+            const.CONF_SUNNY_OVERRIDE_ENTITY,
+            const.CONF_HOT_OVERRIDE_ENTITY,
+            const.CONF_WIND_OVERRIDE_ENTITY,
+        ),
     )
     filled[const.CONF_TEMPERATURE_UNIT] = unit
     return filled

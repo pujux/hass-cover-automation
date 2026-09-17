@@ -35,6 +35,7 @@ CONF_HOT_LOW: Final = "hot_low"
 CONF_HOT_LOW_ENABLED: Final = "hot_low_enabled"
 CONF_SUNNY_OVERRIDE_ENTITY: Final = "sunny_override_entity"
 CONF_HOT_OVERRIDE_ENTITY: Final = "hot_override_entity"
+CONF_WIND_OVERRIDE_ENTITY: Final = "wind_override_entity"
 CONF_SUN_RELEASE_MARGIN: Final = "sun_release_margin"
 CONF_TOLERANCE: Final = "open_closed_tolerance"
 CONF_OVERRIDE_DWELL: Final = "override_dwell"  # minutes

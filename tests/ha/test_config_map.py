@@ -62,6 +62,14 @@ def test_hub_config_converts_minutes_and_optional_low():
     assert hub2.hot_low is None
 
 
+def test_hub_config_exposes_the_wind_override_entity():
+    assert hub_config(make_hub_entry()).wind_override_entity is None
+    hub = hub_config(
+        make_hub_entry(**{const.CONF_WIND_OVERRIDE_ENTITY: "input_boolean.windschutz"})
+    )
+    assert hub.wind_override_entity == "input_boolean.windschutz"
+
+
 def test_hub_config_uses_defaults_for_missing_options():
     entry = MockConfigEntry(
         domain=const.DOMAIN, data={const.CONF_WEATHER_ENTITY: "weather.home"}, options={}

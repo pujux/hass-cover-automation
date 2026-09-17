@@ -268,3 +268,63 @@ async def test_room_only_without_sensor_is_unusable(hass: HomeAssistant, hub_ent
     )
     sig.seed(dt_util.utcnow(), None)
     assert sig.room_unusable is True
+
+
+async def test_wind_forced_reads_the_hub_override_entity(hass: HomeAssistant, hub_entry):
+    """`wind_forced` is True only while the configured entity reports `on`."""
+    src = HubSignalSource(hass, hub_config(hub_entry), DailyLatch())
+    assert src.wind_forced is False  # nothing configured
+    hass.config_entries.async_update_entry(
+        hub_entry,
+        options={
+            **hub_entry.options,
+            const.CONF_WIND_OVERRIDE_ENTITY: "input_boolean.windschutz",
+        },
+    )
+    src = HubSignalSource(hass, hub_config(hub_entry), DailyLatch())
+    assert src.wind_forced is False  # configured but missing
+    hass.states.async_set("input_boolean.windschutz", "on")
+    assert src.wind_forced is True
+    hass.states.async_set("input_boolean.windschutz", "off")
+    assert src.wind_forced is False
+    hass.states.async_set("input_boolean.windschutz", "unavailable")
+    assert src.wind_forced is False
+
+
+async def test_forced_wind_overrides_the_sensor_for_a_wind_enabled_cover(
+    hass: HomeAssistant, hub_entry
+):
+    now = dt_util.utcnow()
+    set_sensor(hass, "sensor.wind", 5.0, unit="km/h")
+    sig, _, _ = cover_set(
+        hass,
+        hub_entry,
+        **{
+            const.CONF_WIND_ENABLED: True,
+            const.CONF_WIND_UPPER: 60,
+            const.CONF_WIND_LOWER: 50,
+            const.CONF_WIND_UNIT: "km/h",
+        },
+    )
+    sig.seed(now, (180.0, 40.0))
+    assert sig.wind_active is False and sig.wind_state == "inactive"
+    sig.force_wind = True
+    assert sig.wind_active is True and sig.wind_state == "forced"
+    assert sig.inputs(CoverState.CLOSED, ScheduleView()).wind_active is True
+    # the computed protection keeps running underneath, so switching the override off
+    # falls straight back to the (calm) sensor rather than to a stale hold.
+    sig.update(now + timedelta(minutes=1), (180.0, 40.0))
+    sig.force_wind = False
+    assert sig.wind_active is False and sig.wind_state == "inactive"
+
+
+async def test_forced_wind_does_not_touch_a_cover_without_wind_protection(
+    hass: HomeAssistant, hub_entry
+):
+    now = dt_util.utcnow()
+    set_sensor(hass, "sensor.wind", 5.0, unit="km/h")
+    sig, _, _ = cover_set(hass, hub_entry)  # wind_enabled defaults to False
+    sig.seed(now, (180.0, 40.0))
+    sig.force_wind = True
+    assert sig.wind_active is False and sig.wind_state == "disabled"
+    assert sig.inputs(CoverState.CLOSED, ScheduleView()).wind_active is False
