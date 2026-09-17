@@ -15,10 +15,17 @@ from homeassistant.helpers.sun import get_astral_event_date
 from homeassistant.util import dt as dt_util
 
 from .engine import schedule
-from .engine.model import CoverState, ScheduleView, Target
-from .engine.schedule import Profile, SunTimes, TimeMode
+from .engine.model import CoverState, ScheduleView
+from .engine.schedule import Profile, RuleAction, SunTimes, TimeMode
 
 _LOGGER = logging.getLogger(__name__)
+
+# How a rule action reads in the cover's `active_rule` attribute.
+_RULE_VERB = {
+    RuleAction.CLOSED: "close",
+    RuleAction.OPEN: "open",
+    RuleAction.RELEASE: "release",
+}
 
 
 class HassSunTimes:
@@ -44,7 +51,7 @@ class NextEvent:
     at: datetime
     profile_id: str
     profile_name: str
-    action: Target
+    action: RuleAction
     rule_index: int
     covers: tuple[str, ...]
 
@@ -131,7 +138,7 @@ class ScheduleTracker:
         if last is None:
             return None
         fired_at, index = last
-        action = "close" if profile.rules[index].action is Target.CLOSED else "open"
+        action = _RULE_VERB[profile.rules[index].action]
         return f"{action} rule {index + 1} of {profile.name} ({fired_at.astimezone(self.tz):%H:%M})"
 
     def skipped_rules_today(self, now: datetime) -> list[tuple[str, int]]:

@@ -7,8 +7,10 @@ from custom_components.cover_automation.engine.schedule import (
     Profile,
     QuietHours,
     Rule,
+    RuleAction,
     TimeMode,
     fire_time,
+    fire_times,
     fired_between,
     last_fired,
     next_fire,
@@ -33,11 +35,15 @@ DAY = date(2026, 7, 1)
 
 
 def close_at(clock: str) -> Rule:
-    return Rule(Target.CLOSED, TimeMode.FIXED, time=t(clock))
+    return Rule(RuleAction.CLOSED, TimeMode.FIXED, time=t(clock))
 
 
 def open_at(clock: str) -> Rule:
-    return Rule(Target.OPEN, TimeMode.FIXED, time=t(clock))
+    return Rule(RuleAction.OPEN, TimeMode.FIXED, time=t(clock))
+
+
+def release_at(clock: str) -> Rule:
+    return Rule(RuleAction.RELEASE, TimeMode.FIXED, time=t(clock))
 
 
 def test_fixed_fire_time():
@@ -45,11 +51,11 @@ def test_fixed_fire_time():
 
 
 def test_sun_relative_with_clamps():
-    r = Rule(Target.OPEN, TimeMode.SUNRISE, offset_minutes=30, earliest=t("07:00"))
+    r = Rule(RuleAction.OPEN, TimeMode.SUNRISE, offset_minutes=30, earliest=t("07:00"))
     assert fire_time(r, DAY, SUN, None, TZ) == at("2026-07-01", "07:00")  # 05:30 clamped up
-    r2 = Rule(Target.CLOSED, TimeMode.SUNSET, offset_minutes=-30, latest=t("20:00"))
+    r2 = Rule(RuleAction.CLOSED, TimeMode.SUNSET, offset_minutes=-30, latest=t("20:00"))
     assert fire_time(r2, DAY, SUN, None, TZ) == at("2026-07-01", "20:00")  # 20:30 clamped down
-    r3 = Rule(Target.CLOSED, TimeMode.SUNSET, offset_minutes=15)
+    r3 = Rule(RuleAction.CLOSED, TimeMode.SUNSET, offset_minutes=15)
     assert fire_time(r3, DAY, SUN, None, TZ) == at("2026-07-01", "21:15")
 
 
@@ -63,9 +69,9 @@ def test_quiet_hours_spanning_midnight():
 
 def test_sun_relative_rule_inside_quiet_hours_is_clamped():
     q = QuietHours(t("22:00"), t("07:00"))
-    close_rule = Rule(Target.CLOSED, TimeMode.SUNSET, offset_minutes=90)  # 22:30
+    close_rule = Rule(RuleAction.CLOSED, TimeMode.SUNSET, offset_minutes=90)  # 22:30
     assert fire_time(close_rule, DAY, SUN, q, TZ) == at("2026-07-01", "21:59")
-    open_rule = Rule(Target.OPEN, TimeMode.SUNRISE, offset_minutes=30)  # 05:30
+    open_rule = Rule(RuleAction.OPEN, TimeMode.SUNRISE, offset_minutes=30)  # 05:30
     assert fire_time(open_rule, DAY, SUN, q, TZ) == at("2026-07-01", "07:00")
 
 
@@ -169,10 +175,10 @@ def test_close_clamp_crossing_into_previous_day_is_skipped():
     # part of the window that started yesterday; clamping to 21:59 would land on the previous
     # day, so the rule is skipped for that day.
     q = QuietHours(t("22:00"), t("07:00"))
-    r = Rule(Target.CLOSED, TimeMode.SUNRISE, offset_minutes=90)  # 05:00 + 90 min = 06:30
+    r = Rule(RuleAction.CLOSED, TimeMode.SUNRISE, offset_minutes=90)  # 05:00 + 90 min = 06:30
     assert fire_time(r, DAY, SUN, q, TZ) is None
     # the open counterpart is clamped forward to the quiet end instead
-    r_open = Rule(Target.OPEN, TimeMode.SUNRISE, offset_minutes=90)
+    r_open = Rule(RuleAction.OPEN, TimeMode.SUNRISE, offset_minutes=90)
     assert fire_time(r_open, DAY, SUN, q, TZ) == at("2026-07-01", "07:00")
 
 
@@ -202,9 +208,9 @@ def test_validate_rejects_bad_rules():
         "p",
         "p",
         (
-            Rule(Target.CLOSED, TimeMode.FIXED, time=None),
+            Rule(RuleAction.CLOSED, TimeMode.FIXED, time=None),
             Rule(
-                Target.OPEN,
+                RuleAction.OPEN,
                 TimeMode.SUNRISE,
                 offset_minutes=0,
                 earliest=t("09:00"),
@@ -216,3 +222,58 @@ def test_validate_rejects_bad_rules():
     assert validate(bad) == ["rule 1 needs a time", "rule 2 earliest is after latest"]
     assert validate(Profile("p", "p", (close_at("21:00"),), None)) == []
     assert next_fire(Profile("p", "p", (), None), at("2026-07-01", "12:00"), SUN) is None
+
+
+def test_rule_action_values_and_targets() -> None:
+    """Stored profiles keep working: close/open keep their values, release is appended."""
+    assert [a.value for a in RuleAction] == ["closed", "open", "release"]
+    assert RuleAction.CLOSED.target is Target.CLOSED
+    assert RuleAction.OPEN.target is Target.OPEN
+    assert RuleAction.RELEASE.target is None
+
+
+def test_release_rule_ends_the_hold_without_an_opinion():
+    p = Profile("p", "p", (close_at("21:30"), release_at("08:00")), None)
+    # before the release rule the close hold still stands
+    held = view(p, at("2026-07-02", "07:59"), SUN, CoverState.CLOSED, None)
+    assert held.desired is Desired.CLOSED and held.rule_index == 0
+    v = view(p, at("2026-07-02", "09:00"), SUN, CoverState.CLOSED, manual_move_at=None)
+    assert v.desired is Desired.LEAVE_ALONE
+    assert v.rule_fired_at == at("2026-07-02", "08:00") and v.rule_index == 1
+    assert not v.released and v.open_rule_fired_at is None
+    # a manual move after the release rule still counts as a release (no behaviour change)
+    v2 = view(
+        p, at("2026-07-02", "09:00"), SUN, CoverState.OPEN, manual_move_at=at("2026-07-02", "08:30")
+    )
+    assert v2.released and v2.desired is Desired.LEAVE_ALONE
+
+
+def test_release_rule_in_quiet_hours_is_clamped_like_an_open_rule():
+    q = QuietHours(t("22:00"), t("07:00"))
+    r = Rule(RuleAction.RELEASE, TimeMode.SUNRISE, offset_minutes=30)  # 05:30
+    assert fire_time(r, DAY, SUN, q, TZ) == at("2026-07-01", "07:00")
+    # a fixed release rule inside quiet hours is invalid, exactly like the other kinds
+    assert fire_time(release_at("23:00"), DAY, SUN, q, TZ) is None
+    assert validate(Profile("p", "p", (close_at("21:00"), release_at("23:00")), q)) == [
+        "rule 2 fires inside quiet hours"
+    ]
+
+
+def test_release_rule_without_a_close_rule_is_flagged():
+    assert validate(Profile("p", "p", (release_at("08:00"),), None)) == [
+        "rule 1 (release) has no earlier close rule to release"
+    ]
+    assert validate(Profile("p", "p", (close_at("21:30"), release_at("08:00")), None)) == []
+    # an open rule is not a hold: it does not satisfy the release rule either
+    assert validate(Profile("p", "p", (open_at("07:00"), release_at("08:00")), None)) == [
+        "rule 2 (release) has no earlier close rule to release"
+    ]
+
+
+def test_fire_times_ordering_is_unchanged_by_release_rules():
+    p = Profile("p", "p", (release_at("08:00"), close_at("21:30"), open_at("07:00")), None)
+    assert fire_times(p, DAY, SUN, TZ) == [
+        (at("2026-07-01", "07:00"), 2),
+        (at("2026-07-01", "08:00"), 0),
+        (at("2026-07-01", "21:30"), 1),
+    ]

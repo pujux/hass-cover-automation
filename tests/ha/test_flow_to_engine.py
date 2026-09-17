@@ -10,8 +10,8 @@ from __future__ import annotations
 from datetime import time
 
 from custom_components.cover_automation import config_map, const
-from custom_components.cover_automation.engine.model import ShadingRule, Target, WindAction
-from custom_components.cover_automation.engine.schedule import QuietHours
+from custom_components.cover_automation.engine.model import ShadingRule, WindAction
+from custom_components.cover_automation.engine.schedule import QuietHours, RuleAction
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -94,7 +94,7 @@ async def test_profile_subentry_defaults_map_to_engine_values(
     subentry = next(iter(hub_entry.subentries.values()))
     prof = config_map.profile(subentry)
 
-    assert prof.rules[0].action is Target.CLOSED
+    assert prof.rules[0].action is RuleAction.CLOSED
     assert prof.rules[0].time == time(21, 30)
     assert prof.quiet_hours == QuietHours(time(22, 0), time(7, 0))
 

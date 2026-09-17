@@ -12,8 +12,8 @@ from custom_components.cover_automation.config_map import (
     parse_time,
     profile,
 )
-from custom_components.cover_automation.engine.model import ShadingRule, Target, WindAction
-from custom_components.cover_automation.engine.schedule import TimeMode
+from custom_components.cover_automation.engine.model import ShadingRule, WindAction
+from custom_components.cover_automation.engine.schedule import RuleAction, TimeMode
 from homeassistant.config_entries import ConfigSubentry
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -205,11 +205,11 @@ def test_profile_mapping_rules_and_quiet_hours():
     p = profile(se)
     assert p.profile_id == "prof1" and p.name == "Bedroom" and len(p.rules) == 2
     assert (
-        p.rules[0].action is Target.CLOSED
+        p.rules[0].action is RuleAction.CLOSED
         and p.rules[0].time_mode is TimeMode.FIXED
         and p.rules[0].time == time(21, 30)
     )
-    assert p.rules[1].action is Target.OPEN and p.rules[1].time_mode is TimeMode.SUNRISE
+    assert p.rules[1].action is RuleAction.OPEN and p.rules[1].time_mode is TimeMode.SUNRISE
     assert (
         p.rules[1].offset_minutes == 30
         and p.rules[1].earliest == time(7, 0)

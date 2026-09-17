@@ -24,9 +24,26 @@ class TimeMode(StrEnum):
     SUNSET = "sunset"
 
 
+class RuleAction(StrEnum):
+    """What a schedule rule does when it fires (spec §1.2 layer 5, decisions 13 and 33).
+
+    The `closed`/`open` values are the ones stored profiles already carry, so adding
+    `release` does not touch existing configuration.
+    """
+
+    CLOSED = "closed"
+    OPEN = "open"
+    RELEASE = "release"
+
+    @property
+    def target(self) -> Target | None:
+        """The state this action drives the cover to; None for `release`, which has none."""
+        return None if self is RuleAction.RELEASE else Target(self.value)
+
+
 @dataclass(frozen=True, slots=True)
 class Rule:
-    action: Target
+    action: RuleAction
     time_mode: TimeMode
     time: time | None = None
     offset_minutes: int = 0
@@ -104,9 +121,10 @@ def fire_time(
     if window is None:
         return fire
     start, end = window
-    if rule.action is Target.CLOSED:
+    if rule.action.target is Target.CLOSED:
         clamped = start - timedelta(minutes=1)
         return clamped if clamped.date() == day else None
+    # open and release rules are clamped forward to the end of the window
     return end
 
 
@@ -183,11 +201,14 @@ def view(
         return ScheduleView(quiet_active=quiet)
     fired_at, index = last
     rule = profile.rules[index]
-    open_fired_at = fired_at if rule.action is Target.OPEN else None
+    open_fired_at = fired_at if rule.action is RuleAction.OPEN else None
     released = manual_move_at is not None and manual_move_at > fired_at
     if released:
         return ScheduleView(quiet, Desired.LEAVE_ALONE, fired_at, index, True, open_fired_at)
-    if rule.action is Target.CLOSED:
+    if rule.action is RuleAction.RELEASE:
+        # The hold is over and nothing is forced: the layers below decide (decision 33).
+        return ScheduleView(quiet, Desired.LEAVE_ALONE, fired_at, index, False, None)
+    if rule.action is RuleAction.CLOSED:
         return ScheduleView(quiet, Desired.CLOSED, fired_at, index, False, None)
     # open rule: one-shot. Opinion only while unsatisfied, within the window, and cover not open.
     in_window = (now - fired_at).total_seconds() <= OPEN_RULE_WINDOW_S
@@ -207,7 +228,10 @@ def _time_in_quiet(quiet: QuietHours | None, clock: time) -> bool:
 def validate(profile: Profile) -> list[str]:
     """Config-time validation messages (empty list = valid)."""
     problems: list[str] = []
+    has_close = any(rule.action is RuleAction.CLOSED for rule in profile.rules)
     for n, rule in enumerate(profile.rules, start=1):
+        if rule.action is RuleAction.RELEASE and not has_close:
+            problems.append(f"rule {n} (release) has no earlier close rule to release")
         if rule.time_mode is TimeMode.FIXED:
             if rule.time is None:
                 problems.append(f"rule {n} needs a time")

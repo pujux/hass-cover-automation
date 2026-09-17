@@ -5,6 +5,7 @@ from custom_components.cover_automation.engine.model import (
     CoverPersisted,
     CoverState,
     DamLayer,
+    Desired,
     Layer,
     Mode,
     Owner,
@@ -13,7 +14,13 @@ from custom_components.cover_automation.engine.model import (
     Target,
     WindAction,
 )
-from custom_components.cover_automation.engine.schedule import Profile, QuietHours, Rule, TimeMode
+from custom_components.cover_automation.engine.schedule import (
+    Profile,
+    QuietHours,
+    Rule,
+    RuleAction,
+    TimeMode,
+)
 
 from tests.engine.conftest import at, t
 from tests.engine.replay import Sim
@@ -21,8 +28,28 @@ from tests.engine.replay import Sim
 CFG = CoverConfig(
     "c", "Bedroom", 180.0, has_door_sensor=True, wind_enabled=True, wind_upper=60.0, wind_lower=50.0
 )
-CLOSE_2130 = Rule(Target.CLOSED, TimeMode.FIXED, time=t("21:30"))
-OPEN_0700 = Rule(Target.OPEN, TimeMode.FIXED, time=t("07:00"))
+CLOSE_2130 = Rule(RuleAction.CLOSED, TimeMode.FIXED, time=t("21:30"))
+OPEN_0700 = Rule(RuleAction.OPEN, TimeMode.FIXED, time=t("07:00"))
+# Julian's bedroom (decision 33): close an hour after sunset (FakeSun sunset 21:00 -> 22:00),
+# hold through the night and past sunrise, hand over to the layers below at 08:00.
+BEDROOM = Profile(
+    "p",
+    "Bedroom",
+    (
+        Rule(RuleAction.CLOSED, TimeMode.SUNSET, offset_minutes=60),
+        Rule(RuleAction.RELEASE, TimeMode.FIXED, time=t("08:00")),
+    ),
+)
+
+
+def held_overnight() -> Sim:
+    """22:00: the close rule has shut the bedroom; the hold runs into the next morning."""
+    sim = Sim(CFG, at("2026-07-01", "21:00"), profile=BEDROOM)
+    sim.night()
+    sim.until("2026-07-01", "22:05")
+    assert sim.actual is CoverState.CLOSED
+    assert sim.commands[-1][1:] == (Target.CLOSED, Layer.SCHEDULE)
+    return sim
 
 
 def shaded_sim(reopening=ReopeningMode.PASSIVE, profile=None) -> Sim:
@@ -268,7 +295,7 @@ def test_f2_restart_during_frost_keeps_live_override():
 
 
 def test_g_single_open_rule_does_not_suppress_shading():
-    profile = Profile("p", "p", (Rule(Target.OPEN, TimeMode.SUNRISE, offset_minutes=30),))
+    profile = Profile("p", "p", (Rule(RuleAction.OPEN, TimeMode.SUNRISE, offset_minutes=30),))
     sim = Sim(
         CFG,
         at("2026-07-01", "05:00"),
@@ -291,8 +318,8 @@ def test_h_two_close_rules_reclose():
         "p",
         "p",
         (
-            Rule(Target.CLOSED, TimeMode.FIXED, time=t("20:00")),
-            Rule(Target.CLOSED, TimeMode.FIXED, time=t("22:00")),
+            Rule(RuleAction.CLOSED, TimeMode.FIXED, time=t("20:00")),
+            Rule(RuleAction.CLOSED, TimeMode.FIXED, time=t("22:00")),
         ),
     )
     sim = Sim(CFG, at("2026-07-01", "19:00"), profile=profile)
@@ -311,7 +338,7 @@ def test_i_sun_relative_rule_clamped_before_quiet_hours():
     profile = Profile(
         "p",
         "p",
-        (Rule(Target.CLOSED, TimeMode.SUNSET, offset_minutes=90),),
+        (Rule(RuleAction.CLOSED, TimeMode.SUNSET, offset_minutes=90),),
         QuietHours(t("22:00"), t("07:00")),
     )  # 22:30 -> clamped to 21:59
     sim = Sim(CFG, at("2026-07-01", "21:00"), profile=profile)
@@ -464,3 +491,50 @@ def test_wind_hold_action_holds_position():
     sim.day(hits=False)
     sim.advance(30)
     assert sim.actual is CoverState.CLOSED  # hold: no reopening during wind
+
+
+def test_o_release_rule_hands_the_hold_to_shading_without_moving():
+    sim = held_overnight()
+    sim.until("2026-07-02", "06:30")
+    sim.day(hits=True)  # sunrise on the east window, hot and sunny
+    sim.until("2026-07-02", "07:59")
+    assert sim.actual is CoverState.CLOSED  # the hold, not shading, keeps it shut
+    assert sim.engine.rt.last_evaluation.layer is Layer.SCHEDULE
+    commands = len(sim.commands)
+    sim.until("2026-07-02", "08:05")
+    # the release rule fires: shading takes over and already wants closed, so nothing moves
+    assert sim.engine.rt.last_evaluation.layer is Layer.SHADING
+    assert sim.engine.rt.last_evaluation.desired is Desired.CLOSED
+    assert sim.actual is CoverState.CLOSED and len(sim.commands) == commands
+
+
+def test_o2_release_rule_reopens_when_nothing_wants_shade():
+    sim = held_overnight()
+    sim.until("2026-07-02", "06:30")
+    sim.day(hits=True)
+    sim.sunny = False  # overcast morning: no shading reason
+    sim.until("2026-07-02", "07:59")
+    assert sim.actual is CoverState.CLOSED  # the hold still stands before 08:00
+    sim.until("2026-07-02", "08:05")
+    # passive reopening is allowed: the engine owns the closed state it created at 22:00
+    assert sim.actual is CoverState.OPEN
+    assert sim.commands[-1][1:] == (Target.OPEN, Layer.SHADING)
+
+
+def test_o3_release_rule_clears_a_manual_override():
+    sim = held_overnight()
+    sim.until("2026-07-02", "05:00")
+    sim.manual(CoverState.OPEN)  # up early: releases the hold and creates an override
+    sim.advance(1)
+    assert sim.engine.p.owner is Owner.USER and sim.engine.p.dam is Target.CLOSED
+    sim.until("2026-07-02", "07:00")
+    sim.day(hits=True)
+    sim.until("2026-07-02", "07:59")
+    assert sim.actual is CoverState.OPEN and sim.engine.p.dam is Target.CLOSED  # respected
+    sim.until("2026-07-02", "08:05")
+    # §1.5(a): a release rule is a rule firing, so it clears the override; shading then decides
+    assert sim.engine.p.dam is None
+    assert sim.actual is CoverState.CLOSED and sim.commands[-1][1:] == (
+        Target.CLOSED,
+        Layer.SHADING,
+    )

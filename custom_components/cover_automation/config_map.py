@@ -11,8 +11,8 @@ from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import UnitOfTemperature
 
 from . import const
-from .engine.model import CoverConfig, ShadingRule, Target, WindAction
-from .engine.schedule import Profile, QuietHours, Rule, TimeMode
+from .engine.model import CoverConfig, ShadingRule, WindAction
+from .engine.schedule import Profile, QuietHours, Rule, RuleAction, TimeMode
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,7 +164,7 @@ def rules_from_data(data: Mapping[str, Any]) -> tuple[Rule, ...]:
     for raw in data.get(const.CONF_RULES, []):
         rules.append(
             Rule(
-                action=Target(raw[const.CONF_RULE_ACTION]),
+                action=RuleAction(raw[const.CONF_RULE_ACTION]),
                 time_mode=TimeMode(raw[const.CONF_RULE_TIME_MODE]),
                 time=parse_time(raw.get(const.CONF_RULE_TIME)),
                 offset_minutes=int(raw.get(const.CONF_RULE_OFFSET, 0) or 0),

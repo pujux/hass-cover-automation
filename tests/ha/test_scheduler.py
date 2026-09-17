@@ -4,8 +4,14 @@ import asyncio
 import logging
 from datetime import date, datetime, time, timedelta
 
-from custom_components.cover_automation.engine.model import CoverState, Desired, Target
-from custom_components.cover_automation.engine.schedule import Profile, QuietHours, Rule, TimeMode
+from custom_components.cover_automation.engine.model import CoverState, Desired
+from custom_components.cover_automation.engine.schedule import (
+    Profile,
+    QuietHours,
+    Rule,
+    RuleAction,
+    TimeMode,
+)
 from custom_components.cover_automation.scheduler import HassSunTimes, ScheduleTracker
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -24,10 +30,20 @@ NIGHT = Profile(
     "p1",
     "Night",
     (
-        Rule(Target.CLOSED, TimeMode.FIXED, time(21, 30)),
-        Rule(Target.OPEN, TimeMode.SUNRISE, None, 30, earliest=time(7, 0)),
+        Rule(RuleAction.CLOSED, TimeMode.FIXED, time(21, 30)),
+        Rule(RuleAction.OPEN, TimeMode.SUNRISE, None, 30, earliest=time(7, 0)),
     ),
     QuietHours(time(22, 0), time(7, 0)),
+)
+
+
+BEDROOM = Profile(
+    "p3",
+    "Bedroom",
+    (
+        Rule(RuleAction.CLOSED, TimeMode.FIXED, time(21, 30)),
+        Rule(RuleAction.RELEASE, TimeMode.FIXED, time(8, 0)),
+    ),
 )
 
 
@@ -46,7 +62,7 @@ async def test_next_event_and_view(hass: HomeAssistant) -> None:
     )
     now = local(2026, 7, 10, 20, 0)
     ev = tracker.next_event(now)
-    assert ev is not None and ev.at == local(2026, 7, 10, 21, 30) and ev.action is Target.CLOSED
+    assert ev is not None and ev.at == local(2026, 7, 10, 21, 30) and ev.action is RuleAction.CLOSED
     assert (
         ev.covers == ("c1",)
         and ev.profile_name == "Night"
@@ -65,8 +81,24 @@ async def test_next_event_and_view(hass: HomeAssistant) -> None:
     assert (
         morning is not None
         and morning.at == local(2026, 7, 11, 7, 0)
-        and morning.action is Target.OPEN
+        and morning.action is RuleAction.OPEN
     )  # 06:30 clamped by earliest 07:00
+
+
+async def test_release_rule_next_event_view_and_label(hass: HomeAssistant) -> None:
+    async def on_fire(covers, at):
+        return None
+
+    tracker = ScheduleTracker(hass, {"p3": BEDROOM}, {"c1": "p3"}, on_fire, sun=FixedSun())
+    ev = tracker.next_event(local(2026, 7, 10, 22, 0))
+    assert ev is not None and ev.at == local(2026, 7, 11, 8, 0)
+    assert ev.action is RuleAction.RELEASE and ev.action.value == "release"
+    before = local(2026, 7, 11, 7, 59)
+    assert tracker.view("c1", before, CoverState.CLOSED, None, None).desired is Desired.CLOSED
+    after = local(2026, 7, 11, 8, 1)
+    view = tracker.view("c1", after, CoverState.CLOSED, None, None)
+    assert view.desired is Desired.LEAVE_ALONE and view.rule_index == 1
+    assert tracker.active_rule_label("c1", after) == "release rule 2 of Bedroom (08:00)"
 
 
 async def test_arm_fires_and_rearms(hass: HomeAssistant, freezer) -> None:
@@ -189,8 +221,8 @@ async def test_fired_only_covers_the_exact_instant(hass: HomeAssistant, freezer)
     async def on_fire(covers, at):
         fired.append((covers, at))
 
-    profile_a = Profile("pa", "A", (Rule(Target.CLOSED, TimeMode.FIXED, time(21, 30, 0)),))
-    profile_b = Profile("pb", "B", (Rule(Target.CLOSED, TimeMode.FIXED, time(21, 30, 20)),))
+    profile_a = Profile("pa", "A", (Rule(RuleAction.CLOSED, TimeMode.FIXED, time(21, 30, 0)),))
+    profile_b = Profile("pb", "B", (Rule(RuleAction.CLOSED, TimeMode.FIXED, time(21, 30, 20)),))
 
     freezer.move_to(local(2026, 7, 10, 21, 29, 50))
     tracker = ScheduleTracker(
@@ -223,7 +255,7 @@ async def test_hass_sun_times_and_skipped_rules(hass: HomeAssistant) -> None:
     all_day_quiet = Profile(
         "p2",
         "Quiet",
-        (Rule(Target.CLOSED, TimeMode.SUNSET, None, 0),),
+        (Rule(RuleAction.CLOSED, TimeMode.SUNSET, None, 0),),
         QuietHours(time(0, 0), time(23, 59)),
     )
     tracker = ScheduleTracker(
