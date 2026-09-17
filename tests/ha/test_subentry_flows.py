@@ -689,3 +689,26 @@ async def test_cover_elevation_min_must_be_below_max(hass: HomeAssistant, hub_en
         {**COVER_INPUT, const.CONF_ELEVATION_MIN: 50, const.CONF_ELEVATION_MAX: 40},
     )
     assert result["errors"] == {const.CONF_ELEVATION_MIN: "elevation_min_not_below_max"}
+
+
+async def test_validation_error_keeps_the_picked_profiles(hass: HomeAssistant, hub_entry) -> None:
+    """Re-rendering the form after an error must not silently drop the picker's selection."""
+    set_weather(hass)
+    set_cover(hass, "cover.bedroom")
+    hass.config_entries.async_add_subentry(
+        hub_entry, config_entries.ConfigSubentry(**profile_subentry_data("Night"))
+    )
+    night = next(iter(hub_entry.subentries.values()))
+    night_switch = register_profile_switch(hass, hub_entry, night.subentry_id)
+    result = await start(hass, hub_entry, const.SUBENTRY_COVER)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {
+            **COVER_INPUT,
+            const.CONF_COMFORT_FLOOR: 26,  # floor above ceiling: one error, form comes back
+            const.CONF_SCHEDULE_PROFILES: [night_switch],
+        },
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {const.CONF_COMFORT_FLOOR: "floor_not_below_ceiling"}
+    assert _suggested(result, const.CONF_SCHEDULE_PROFILES) == [night_switch]

@@ -572,6 +572,16 @@ class CoverSubentryFlow(ConfigSubentryFlow):
                     return self.async_update_and_abort(entry, current, title=title, data=data)
                 return self.async_create_entry(title=title, data=data)
         defaults: Mapping[str, Any] = user_input or (current.data if current else {})
+        if user_input is not None:
+            # `cover_schema` reads defaults in the STORED shape, but a form coming back with
+            # errors hands back the picker's entity ids: translate them or the user's
+            # selection would silently vanish from the re-rendered form.
+            defaults = {
+                **user_input,
+                const.CONF_SCHEDULE_PROFILES: profile_ids_from_entities(
+                    self.hass, user_input.get(const.CONF_SCHEDULE_PROFILES)
+                ),
+            }
         return self.async_show_form(
             step_id="reconfigure" if reconfigure else "user",
             data_schema=cover_schema(self.hass, entry, defaults, unit),
