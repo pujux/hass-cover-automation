@@ -892,3 +892,36 @@ async def test_missing_entity_repairs_follow_live_state(hass, hub_entry, cover_s
         assert hub_entry.runtime_data.missing_entities == []
     finally:
         await controller.async_stop()
+
+
+async def test_protection_keeps_running_through_a_sun_outage(hass, hub_entry, cover_services):
+    """R3: a `sun.sun` blip must not pause wind, frost and door protection."""
+    controller, _sub_id = await start_controller(
+        hass,
+        hub_entry,
+        cover_overrides={
+            const.CONF_WIND_ENABLED: True,
+            const.CONF_WIND_UPPER: 60,
+            const.CONF_WIND_LOWER: 50,
+            const.CONF_WIND_UNIT: "km/h",
+        },
+    )
+    reg = ir.async_get(hass)
+    issue_id = f"sun_missing_{hub_entry.entry_id}"
+    try:
+        set_cover(hass, "cover.bedroom", state="closed", position=0)
+        await hass.async_block_till_done()
+        hass.states.async_remove("sun.sun")
+        await hass.async_block_till_done()
+        assert reg.async_get_issue(const.DOMAIN, issue_id) is not None
+
+        set_sensor(hass, "sensor.wind", 75.0, unit="km/h", device_class="wind_speed")
+        await hass.async_block_till_done()
+        assert len(cover_services["open"]) == 1  # evaluated on the cached sun position
+        assert reg.async_get_issue(const.DOMAIN, issue_id) is not None
+
+        set_sun(hass, elevation=40.0, azimuth=180.0)
+        await hass.async_block_till_done()
+        assert reg.async_get_issue(const.DOMAIN, issue_id) is None
+    finally:
+        await controller.async_stop()

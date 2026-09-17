@@ -133,6 +133,9 @@ class CoverAutomationController:
         self._cover_timers: dict[str, CALLBACK_TYPE] = {}
         self._unsubs: list[CALLBACK_TYPE] = []
         self._last_forecast_fetch: datetime | None = None
+        # Last known `(azimuth, elevation)`: a `sun.sun` blip must not pause wind, frost and
+        # door protection, so evaluation falls back to it while the entity is away (§2).
+        self._last_sun: tuple[float, float] | None = None
         self._watched: dict[str, set[str] | None] = {}
         self._problem = False
         # One lock per cover: an evaluation (and its blocking service call) only ever
@@ -390,10 +393,15 @@ class CoverAutomationController:
             return
         at = now or dt_util.utcnow()
         ids = list(cover_ids) if cover_ids is not None else list(self._engines)
-        sun = sun_position(self.hass)
+        fresh_sun = sun_position(self.hass)
         # Hub-level bookkeeping stays outside the per-cover locks.
         self._hub_signals.update(at)
-        self._update_hub_repairs(at, sun)
+        self._update_hub_repairs(at, fresh_sun)
+        if fresh_sun is not None:
+            self._last_sun = fresh_sun
+        # Only shading opinions go stale on a cached position; the protection layers must keep
+        # running. Skip the covers entirely only while no position was ever known.
+        sun = self._last_sun
         if sun is not None:
             hub_sig = self._hub_signals.signals(at, self._store.data, sun[1])
             for cover_id in ids:
