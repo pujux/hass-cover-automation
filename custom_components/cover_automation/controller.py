@@ -122,6 +122,15 @@ class CoverAutomationController:
         # would finish on a dead entry (live listeners, armed timers, real commands).
         self._stopped = False
         self.cover_names: Mapping[str, str] = {cid: cfg.name for cid, (cfg, _b) in covers.items()}
+        self.profile_names: Mapping[str, str] = {
+            pid: profile.name for pid, profile in self._profiles.items()
+        }
+        # Seeded from the Store like the cover views: the switch is added well before the
+        # start job runs, and a restart must not show a silenced profile as switched on.
+        self._profile_enabled: dict[str, bool] = {
+            pid: store.data.profiles.get(pid, True) for pid in self._profiles
+        }
+        self.profile_enabled: Mapping[str, bool] = self._profile_enabled
         self._engines: dict[str, CoverEngine] = {}
         self._signals: dict[str, CoverSignalSet] = {}
         self._hub_signals = HubSignalSource(hass, hub, store.data.latch)
@@ -130,6 +139,7 @@ class CoverAutomationController:
             self._profiles,
             {cid: cfg.profile_ids for cid, (cfg, _b) in covers.items()},
             self._on_rule_fired,
+            enabled=self._is_profile_enabled,
             create_task=self._create_task,
         )
         self._actual: dict[str, CoverState] = {}
@@ -166,6 +176,13 @@ class CoverAutomationController:
             cid: self._seed_cover_view(cid) for cid in covers
         }
         self.cover_views: Mapping[str, CoverView] = self._cover_views
+
+    def _is_profile_enabled(self, profile_id: str) -> bool:
+        """Unknown ids count as enabled: a profile only ever has a Store record once toggled."""
+        return self._profile_enabled.get(profile_id, True)
+
+    def _covers_using(self, profile_id: str) -> set[str]:
+        return {cid for cid, (cfg, _b) in self._covers.items() if profile_id in cfg.profile_ids}
 
     def _persisted(self, cover_id: str) -> CoverPersisted:
         """The Store record for a cover -- the very object `async_start` builds its engine on."""
@@ -936,6 +953,17 @@ class CoverAutomationController:
             self._persisted(cover_id).enabled = enabled
         await self._store.async_save()
         await self._async_after_write({cover_id})
+
+    async def async_set_profile_enabled(self, profile_id: str, enabled: bool) -> None:
+        """Switch a whole schedule profile on or off for every cover that references it."""
+        self._profile_enabled[profile_id] = enabled
+        self._store.data.profiles[profile_id] = enabled
+        await self._store.async_save()
+        if self.started:
+            # The armed timer may belong to the profile that just went quiet, and the next
+            # event for every other cover can change too, so re-arm from scratch.
+            self._schedule.async_arm(dt_util.utcnow())
+        await self._async_after_write(self._covers_using(profile_id))
 
     async def async_set_mode(self, cover_id: str, mode: Mode) -> None:
         async with self._locks[cover_id]:

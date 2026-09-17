@@ -123,7 +123,7 @@ WEATHER_CONDITIONS: Final[list[str]] = [
 ]
 
 STORAGE_VERSION: Final = 1
-STORAGE_MINOR_VERSION: Final = 2
+STORAGE_MINOR_VERSION: Final = 3
 
 
 def storage_key(entry_id: str) -> str:

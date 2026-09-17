@@ -29,6 +29,8 @@ def _enum_or_default[E: Enum](enum: type[E], raw: Any, default: E) -> E:
 @dataclass(slots=True)
 class StoreData:
     covers: dict[str, CoverPersisted] = field(default_factory=dict)
+    # Schedule profile subentry id -> switched on. A missing key means on (minor version 3).
+    profiles: dict[str, bool] = field(default_factory=dict)
     latch: DailyLatch = field(default_factory=DailyLatch)
     shading_mode: ShadingMode = ShadingMode.AUTO
     reopening_mode: ReopeningMode = ReopeningMode.PASSIVE
@@ -38,6 +40,7 @@ class StoreData:
     def to_dict(self) -> dict[str, Any]:
         return {
             "covers": {cover_id: p.to_dict() for cover_id, p in self.covers.items()},
+            "profiles": dict(self.profiles),
             "latch": self.latch.to_dict(),
             "shading_mode": self.shading_mode.value,
             "reopening_mode": self.reopening_mode.value,
@@ -70,6 +73,14 @@ class StoreData:
             except (ValueError, TypeError) as err:
                 _LOGGER.warning("Discarding persisted state for cover %s: %s", cover_id, err)
                 covers[str(cover_id)] = CoverPersisted()
+        profiles_raw = raw.get("profiles")
+        if not isinstance(profiles_raw, dict):
+            if profiles_raw is not None:
+                _LOGGER.warning(
+                    "Discarding persisted profile switches: expected a mapping, got %s",
+                    type(profiles_raw).__name__,
+                )
+            profiles_raw = {}
         try:
             latch = DailyLatch.from_dict(dict(raw.get("latch") or {}))
         except (ValueError, TypeError) as err:
@@ -77,6 +88,7 @@ class StoreData:
             latch = DailyLatch()
         return cls(
             covers=covers,
+            profiles={str(key): bool(value) for key, value in profiles_raw.items()},
             latch=latch,
             shading_mode=_enum_or_default(ShadingMode, raw.get("shading_mode"), ShadingMode.AUTO),
             reopening_mode=_enum_or_default(
@@ -132,11 +144,14 @@ class CoverAutomationStore:
         self._data = StoreData.from_dict(raw)
         return self._data
 
-    def prune(self, keep: Iterable[str]) -> None:
-        """Drop persisted cover records whose subentry no longer exists."""
-        keep_set = set(keep)
-        for cover_id in [c for c in self.data.covers if c not in keep_set]:
+    def prune(self, covers: Iterable[str], profiles: Iterable[str]) -> None:
+        """Drop persisted cover and profile records whose subentry no longer exists."""
+        keep_covers = set(covers)
+        for cover_id in [c for c in self.data.covers if c not in keep_covers]:
             del self.data.covers[cover_id]
+        keep_profiles = set(profiles)
+        for profile_id in [p for p in self.data.profiles if p not in keep_profiles]:
+            del self.data.profiles[profile_id]
 
     def _to_save(self) -> dict[str, Any]:
         return self.data.to_dict()

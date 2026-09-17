@@ -51,6 +51,12 @@ def _subentry_id(hub_entry, subentry_type: str) -> str:
     )
 
 
+def _subentry_ids(hub_entry, subentry_type: str) -> list[str]:
+    return [
+        s.subentry_id for s in hub_entry.subentries.values() if s.subentry_type == subentry_type
+    ]
+
+
 async def build_controller(
     hass: HomeAssistant,
     hub_entry,
@@ -59,14 +65,22 @@ async def build_controller(
     persisted=None,
     store_overrides=None,
     profile=None,
+    profiles=None,
     elevation=40.0,
     cover_state=("open", 100, 3),
 ):
-    """Set up the hub (2a) with one cover subentry and build an unstarted controller on top."""
+    """Set up the hub (2a) with one cover subentry and build an unstarted controller on top.
+
+    `profile` stores the pre-0.5 single-profile key; `profiles` stores the ordered list.
+    """
     overrides = dict(cover_overrides or {})
     if profile is not None:
         hass.config_entries.async_add_subentry(hub_entry, ConfigSubentry(**profile))
         overrides[const.CONF_SCHEDULE_PROFILE] = _subentry_id(hub_entry, const.SUBENTRY_PROFILE)
+    if profiles is not None:
+        for data in profiles:
+            hass.config_entries.async_add_subentry(hub_entry, ConfigSubentry(**data))
+        overrides[const.CONF_SCHEDULE_PROFILES] = _subentry_ids(hub_entry, const.SUBENTRY_PROFILE)
     hass.config_entries.async_add_subentry(
         hub_entry, ConfigSubentry(**cover_subentry_data("cover.bedroom", **overrides))
     )
@@ -1215,3 +1229,131 @@ async def test_missing_wind_override_entity_raises_a_repair(hass, hub_entry, cov
         assert reg.async_get_issue(const.DOMAIN, issue_id) is None
     finally:
         await controller.async_stop()
+
+
+# --- v0.5.0: several schedule profiles per cover ---
+
+
+def _fixed(action: str, clock: str) -> dict:
+    return {
+        const.CONF_RULE_ACTION: action,
+        const.CONF_RULE_TIME_MODE: "fixed",
+        const.CONF_RULE_TIME: clock,
+    }
+
+
+EVENING_RULES = [_fixed("closed", "20:00:00"), _fixed("release", "06:00:00")]
+VACATION_RULES = [_fixed("closed", "22:00:00"), _fixed("release", "09:00:00")]
+
+
+async def test_overlapping_profile_holds_end_to_end(hass, hub_entry, cover_services, freezer):
+    """Evening (priority 1) releases at 06:00 but Vacation, one rank down, holds until 09:00."""
+    freezer.move_to(dt_util.now().replace(hour=19, minute=50, second=0, microsecond=0))
+    with patch(
+        "custom_components.cover_automation.controller.async_fetch_today",
+        AsyncMock(return_value=TodayForecast(10.0, 5.0)),
+    ):
+        controller, sub_id = await start_controller(
+            hass,
+            hub_entry,
+            forecast=TodayForecast(10.0, 5.0),  # cold day: shading never wants to close
+            elevation=-10.0,
+            profiles=[
+                profile_subentry_data("Evening", rules=EVENING_RULES, quiet=None),
+                profile_subentry_data("Vacation", rules=VACATION_RULES, quiet=None),
+            ],
+        )
+        try:
+            evening_id, vacation_id = _subentry_ids(hub_entry, const.SUBENTRY_PROFILE)
+            assert controller._covers[sub_id][0].profile_ids == (evening_id, vacation_id)
+            assert not cover_services["close"]
+
+            freezer.tick(timedelta(minutes=11))  # 20:01: Evening closes it
+            async_fire_time_changed(hass)
+            await hass.async_block_till_done()
+            assert len(cover_services["close"]) == 1
+            set_cover(hass, "cover.bedroom", state="closed", position=0)
+            await hass.async_block_till_done()
+            assert "Evening" in (controller.cover_views[sub_id].active_rule or "")
+
+            freezer.tick(timedelta(hours=10, minutes=30))  # 06:31 next day: Evening released
+            set_sun(hass, elevation=30.0, azimuth=180.0)
+            async_fire_time_changed(hass)
+            await hass.async_block_till_done()
+            view = controller.cover_views[sub_id]
+            assert view.status is Status.SCHEDULE_HOLD  # Vacation still holds it shut
+            assert "Vacation" in (view.active_rule or "")
+            assert not cover_services["open"]
+
+            freezer.tick(timedelta(hours=2, minutes=30))  # 09:01: Vacation releases too
+            async_fire_time_changed(hass)
+            await hass.async_block_till_done()
+            assert len(cover_services["open"]) == 1  # shading reopens the cold, shaded room
+        finally:
+            await controller.async_stop()
+
+
+async def test_switching_a_profile_off_hands_the_cover_to_the_next_one(
+    hass, hub_entry, cover_services, freezer
+):
+    """A switched-off profile has no opinion: the next profile down decides instead."""
+    freezer.move_to(dt_util.now().replace(hour=22, minute=30, second=0, microsecond=0))
+    controller, sub_id = await start_controller(
+        hass,
+        hub_entry,
+        forecast=TodayForecast(10.0, 5.0),
+        elevation=-10.0,
+        profiles=[
+            profile_subentry_data("Evening", rules=[_fixed("closed", "20:00:00")], quiet=None),
+            profile_subentry_data("Vacation", rules=[_fixed("open", "22:25:00")], quiet=None),
+        ],
+    )
+    try:
+        evening_id, vacation_id = _subentry_ids(hub_entry, const.SUBENTRY_PROFILE)
+        assert controller.profile_enabled == {evening_id: True, vacation_id: True}
+        assert controller.profile_names[vacation_id] == "Vacation"
+        assert len(cover_services["close"]) == 1  # Evening's hold wins over Vacation's open rule
+        set_cover(hass, "cover.bedroom", state="closed", position=0)
+        await hass.async_block_till_done()
+
+        await controller.async_set_profile_enabled(evening_id, False)
+        await hass.async_block_till_done()
+        assert controller.profile_enabled[evening_id] is False
+        assert controller._store.data.profiles[evening_id] is False
+        view = controller.cover_views[sub_id]
+        assert "Vacation" in (view.active_rule or "")
+        assert len(cover_services["open"]) == 1  # Vacation's open rule now decides
+
+        # and the hub's next planned event no longer mentions the silenced profile
+        assert controller.hub_view.next_event_profile == "Vacation"
+    finally:
+        await controller.async_stop()
+
+
+async def test_profile_enabled_is_seeded_from_the_store_before_the_start_job(
+    hass, hub_entry, cover_services
+):
+    """The switch is added long before `async_start`: a silenced profile must read as off."""
+    controller, _sub_id = await build_controller(
+        hass,
+        hub_entry,
+        profiles=[profile_subentry_data("Evening", rules=[_fixed("closed", "20:00:00")])],
+    )
+    evening_id = _subentry_id(hub_entry, const.SUBENTRY_PROFILE)
+    assert controller.profile_enabled[evening_id] is True
+    # a Store written before this controller existed
+    hub_entry.runtime_data.store.data.profiles[evening_id] = False
+    reborn = CoverAutomationController(
+        hass,
+        hub_entry,
+        hub=hub_entry.runtime_data.hub,
+        covers=hub_entry.runtime_data.covers,
+        profiles=hub_entry.runtime_data.profiles,
+        store=hub_entry.runtime_data.store,
+        hub_device_id=hub_entry.runtime_data.hub_device_id,
+    )
+    assert reborn.profile_enabled[evening_id] is False
+    # a write before the start job still persists and publishes without evaluating
+    await reborn.async_set_profile_enabled(evening_id, True)
+    assert reborn.profile_enabled[evening_id] is True
+    assert reborn._schedule._unsub is None  # nothing armed: the controller never started

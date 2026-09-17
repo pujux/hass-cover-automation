@@ -115,9 +115,10 @@ def _delete_stale_issues(
 
 @callback
 def ensure_devices(hass: HomeAssistant, entry: ConfigEntry) -> str:
-    """Create the hub device and one device per cover subentry (2026.8 rules).
+    """Create the hub device and one device per cover and profile subentry (2026.8 rules).
 
-    Returns the hub device id.
+    A schedule profile gets a device of its own so its enable switch has somewhere to live and
+    can be found by name in the UI. Returns the hub device id.
     """
     registry = dr.async_get(hass)
     hub_device = registry.async_get_or_create(
@@ -137,6 +138,16 @@ def ensure_devices(hass: HomeAssistant, entry: ConfigEntry) -> str:
             name=str(subentry.data.get(const.CONF_NAME) or subentry.title),
             manufacturer="Cover Automation",
             model="Cover",
+            via_device_id=hub_device.id,
+        )
+    for subentry in entry.get_subentries_of_type(const.SUBENTRY_PROFILE):
+        registry.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            config_subentry_id=subentry.subentry_id,
+            identifiers={(const.DOMAIN, subentry.subentry_id)},
+            name=str(subentry.data.get(const.CONF_NAME) or subentry.title),
+            manufacturer="Cover Automation",
+            model="Schedule profile",
             via_device_id=hub_device.id,
         )
     return hub_device.id
@@ -236,7 +247,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: CoverAutomationConfigEnt
     # "Removed" means the subentry is gone, not that it currently fails to parse: a cover
     # that is temporarily broken (see the broken_cover_config repair above) must keep its
     # persisted state, so prune against every cover subentry id, not just the ones in `covers`.
-    store.prune({s.subentry_id for s in entry.get_subentries_of_type(const.SUBENTRY_COVER)})
+    store.prune(
+        {s.subentry_id for s in entry.get_subentries_of_type(const.SUBENTRY_COVER)},
+        {s.subentry_id for s in entry.get_subentries_of_type(const.SUBENTRY_PROFILE)},
+    )
 
     # The controller is built before the platforms are forwarded: every platform reads
     # `runtime_data.controller` in its `async_setup_entry`. It only starts (subscriptions,

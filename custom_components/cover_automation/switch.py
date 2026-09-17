@@ -1,4 +1,4 @@
-"""Switch platform: hub simulation/verbose, per-cover enabled (spec §4)."""
+"""Switch platform: hub simulation/verbose, per-cover and per-profile enabled (spec §4)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .entity import ControllerProtocol, CoverEntityBase, HubEntity
+from .entity import ControllerProtocol, CoverEntityBase, HubEntity, ProfileEntityBase
 
 
 async def async_setup_entry(
@@ -23,6 +23,9 @@ async def async_setup_entry(
     for subentry_id in entry.runtime_data.covers:
         entity = CoverEnabledSwitch(entry, controller, subentry_id)
         async_add_entities([entity], config_subentry_id=subentry_id)
+    for subentry_id in entry.runtime_data.profiles:
+        profile_switch = ProfileEnabledSwitch(entry, controller, subentry_id)
+        async_add_entities([profile_switch], config_subentry_id=subentry_id)
 
 
 class SimulationModeSwitch(HubEntity, SwitchEntity):
@@ -76,3 +79,28 @@ class CoverEnabledSwitch(CoverEntityBase, SwitchEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self._controller.async_set_enabled(self.subentry_id, False)
+
+
+class ProfileEnabledSwitch(ProfileEntityBase, SwitchEntity):
+    """Silences a whole schedule profile for every cover that references it.
+
+    Deliberately without an entity category: unlike the per-cover config switches this is a
+    control the user reaches for (a vacation profile is switched on and off from a dashboard),
+    and the cover flow's profile picker lists profiles by this very entity, which a
+    config-category entity would hide from entity selectors.
+    """
+
+    def __init__(
+        self, entry: ConfigEntry, controller: ControllerProtocol, subentry_id: str
+    ) -> None:
+        super().__init__(entry, controller, subentry_id, "profile_enabled")
+
+    @property
+    def is_on(self) -> bool:
+        return self.enabled_profile
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._controller.async_set_profile_enabled(self.subentry_id, True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._controller.async_set_profile_enabled(self.subentry_id, False)

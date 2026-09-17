@@ -132,7 +132,9 @@ async def platform_keys(hass, hub_entry, module) -> set[str]:
     ctrl = FakeController()
     ctrl.cover_views["sub1"] = CoverView(name="Bedroom", cover_entity="cover.bedroom")
     ctrl.cover_names["sub1"] = "Bedroom"
-    hub_entry.runtime_data = SimpleNamespace(controller=ctrl, covers={"sub1": (None, None)})
+    hub_entry.runtime_data = SimpleNamespace(
+        controller=ctrl, covers={"sub1": (None, None)}, profiles={"prof1": None}
+    )
     added: list = []
 
     def add(entities, update_before_add=False, *, config_subentry_id=None):

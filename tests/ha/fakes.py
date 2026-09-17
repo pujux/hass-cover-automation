@@ -15,6 +15,8 @@ class FakeController:
         self.hub_view = HubView()
         self.cover_views: dict[str, CoverView] = {}
         self.cover_names: dict[str, str] = {}
+        self.profile_enabled: dict[str, bool] = {}
+        self.profile_names: dict[str, str] = {}
         self.calls: list[tuple] = []
 
     def notify(self, hass: HomeAssistant, entry_id: str) -> None:
@@ -22,6 +24,9 @@ class FakeController:
 
     async def async_set_enabled(self, cover_id: str, enabled: bool) -> None:
         self.calls.append(("set_enabled", cover_id, enabled))
+
+    async def async_set_profile_enabled(self, profile_id: str, enabled: bool) -> None:
+        self.calls.append(("set_profile_enabled", profile_id, enabled))
 
     async def async_set_mode(self, cover_id: str, mode: Mode) -> None:
         self.calls.append(("set_mode", cover_id, mode))

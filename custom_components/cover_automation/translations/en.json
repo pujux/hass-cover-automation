@@ -388,6 +388,9 @@
       "enabled": {
         "name": "Automation enabled"
       },
+      "profile_enabled": {
+        "name": "Schedule enabled"
+      },
       "simulation_mode": {
         "name": "Simulation mode"
       },

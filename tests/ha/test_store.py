@@ -106,8 +106,11 @@ async def test_prune_drops_records_of_removed_covers(
     await store.async_load()
     store.data.covers["keep"] = CoverPersisted()
     store.data.covers["gone"] = CoverPersisted()
-    store.prune(keep={"keep"})
+    store.data.profiles["p_keep"] = False
+    store.data.profiles["p_gone"] = False
+    store.prune(covers={"keep"}, profiles={"p_keep"})
     assert set(store.data.covers) == {"keep"}
+    assert set(store.data.profiles) == {"p_keep"}
 
 
 async def test_store_minor_version_migration_passthrough(
@@ -123,3 +126,29 @@ async def test_store_minor_version_migration_passthrough(
     data = await CoverAutomationStore(hass, "e").async_load()
     assert data.simulation is True
     assert data.covers["sub1"].owner is Owner.USER and data.covers["sub1"].last_send_at is None
+
+
+def test_profile_enabled_map_roundtrips_and_defaults():
+    data = StoreData()
+    assert data.profiles == {}  # an old store has no key at all: every profile is on
+    data.profiles["prof1"] = False
+    again = StoreData.from_dict(data.to_dict())
+    assert again.profiles == {"prof1": False}
+    # garbage is discarded rather than crashing the load
+    assert StoreData.from_dict({"profiles": ["not", "a", "dict"]}).profiles == {}
+    assert StoreData.from_dict({"profiles": {"prof1": "yes"}}).profiles == {"prof1": True}
+
+
+async def test_store_minor_version_2_loads_without_a_profiles_key(
+    hass: HomeAssistant, hass_storage: dict
+) -> None:
+    """Minor 3 adds the profile-enabled map; a minor-2 record simply has no key."""
+    hass_storage[const.storage_key("e3")] = {
+        "version": 1,
+        "minor_version": 2,
+        "key": const.storage_key("e3"),
+        "data": {"covers": {"sub1": {"owner": "user"}}},
+    }
+    data = await CoverAutomationStore(hass, "e3").async_load()
+    assert data.profiles == {}
+    assert data.covers["sub1"].owner is Owner.USER

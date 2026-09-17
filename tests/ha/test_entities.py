@@ -38,7 +38,9 @@ async def test_hub_entity_base_identity(hass: HomeAssistant, hub_entry) -> None:
 
 async def collect(hass, hub_entry, module, ctrl):
     """Run a platform's async_setup_entry against a fake controller; return (entities, per-subentry ids)."""
-    hub_entry.runtime_data = SimpleNamespace(controller=ctrl, covers={"sub1": (None, None)})
+    hub_entry.runtime_data = SimpleNamespace(
+        controller=ctrl, covers={"sub1": (None, None)}, profiles={"prof1": None}
+    )
     added: list = []
     subentry_ids: list = []
 
@@ -70,27 +72,50 @@ def fake_with_cover_views() -> FakeController:
 async def test_switch_platform(hass, hub_entry):
     ctrl = fake_with_cover()
     ctrl.hub_view = HubView(simulation=True, verbose=False)
+    ctrl.profile_enabled["prof1"] = False
     entities, sub_ids = await collect(hass, hub_entry, switch, ctrl)
     by_key = {e.translation_key: e for e in entities}
-    assert set(by_key) == {"simulation_mode", "verbose_logging", "enabled"} and "sub1" in sub_ids
-    assert all(e.entity_category is EntityCategory.CONFIG for e in entities)
+    assert set(by_key) == {"simulation_mode", "verbose_logging", "enabled", "profile_enabled"}
+    assert "sub1" in sub_ids and "prof1" in sub_ids
+    assert all(
+        e.entity_category is EntityCategory.CONFIG
+        for e in entities
+        if e.translation_key != "profile_enabled"
+    )
     assert (
         by_key["simulation_mode"].is_on is True
         and by_key["verbose_logging"].is_on is False
         and by_key["enabled"].is_on is True
+        and by_key["profile_enabled"].is_on is False
     )
     await by_key["simulation_mode"].async_turn_off()
     await by_key["verbose_logging"].async_turn_on()
     await by_key["enabled"].async_turn_off()
+    await by_key["profile_enabled"].async_turn_on()
     assert ctrl.calls == [
         ("set_simulation", False),
         ("set_verbose", True),
         ("set_enabled", "sub1", False),
+        ("set_profile_enabled", "prof1", True),
     ]
     assert (
         by_key["enabled"].unique_id == "sub1_enabled"
         and by_key["simulation_mode"].unique_id == f"{hub_entry.entry_id}_simulation_mode"
     )
+
+
+async def test_profile_switch_identity_device_and_category(hass, hub_entry):
+    """The profile switch must stay pickable: its own device, no entity category."""
+    ctrl = fake_with_cover()
+    entities, sub_ids = await collect(hass, hub_entry, switch, ctrl)
+    profile_switch = next(e for e in entities if e.translation_key == "profile_enabled")
+    assert profile_switch.unique_id == "prof1_profile_enabled"
+    assert profile_switch.entity_category is None
+    assert (const.DOMAIN, "prof1") in profile_switch.device_info["identifiers"]
+    # added under the profile subentry, not the cover's
+    assert sub_ids[-1] == "prof1"
+    # an untouched profile reads as on
+    assert profile_switch.is_on is True
 
 
 async def test_select_platform(hass, hub_entry):

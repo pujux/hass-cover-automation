@@ -20,8 +20,11 @@ class ControllerProtocol(Protocol):
     hub_view: HubView
     cover_views: Mapping[str, CoverView]
     cover_names: Mapping[str, str]
+    profile_enabled: Mapping[str, bool]
+    profile_names: Mapping[str, str]
 
     async def async_set_enabled(self, cover_id: str, enabled: bool) -> None: ...
+    async def async_set_profile_enabled(self, profile_id: str, enabled: bool) -> None: ...
     async def async_set_mode(self, cover_id: str, mode: Mode) -> None: ...
     async def async_set_shading_mode(self, mode: ShadingMode) -> None: ...
     async def async_set_reopening_mode(self, mode: ReopeningMode) -> None: ...
@@ -64,7 +67,9 @@ class HubEntity(_BaseEntity):
         self._attr_device_info = DeviceInfo(identifiers={(const.DOMAIN, entry.entry_id)})
 
 
-class CoverEntityBase(_BaseEntity):
+class _SubentryEntity(_BaseEntity):
+    """An entity that lives on a subentry's own device (one per cover, one per profile)."""
+
     def __init__(
         self, entry: ConfigEntry, controller: ControllerProtocol, subentry_id: str, key: str
     ) -> None:
@@ -73,6 +78,14 @@ class CoverEntityBase(_BaseEntity):
         self._attr_unique_id = f"{subentry_id}_{key}"
         self._attr_device_info = DeviceInfo(identifiers={(const.DOMAIN, subentry_id)})
 
+
+class CoverEntityBase(_SubentryEntity):
     @property
     def view(self) -> CoverView:
         return self._controller.cover_views[self.subentry_id]
+
+
+class ProfileEntityBase(_SubentryEntity):
+    @property
+    def enabled_profile(self) -> bool:
+        return self._controller.profile_enabled.get(self.subentry_id, True)

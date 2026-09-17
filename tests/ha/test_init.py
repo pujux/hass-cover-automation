@@ -55,6 +55,17 @@ async def test_setup_creates_hub_and_cover_devices(hass: HomeAssistant, hub_entr
     assert cover_device.config_subentry_id == cover_sub.subentry_id
     assert cover_device.via_device_id == hub_device.id and cover_device.name == "Bedroom"
 
+    profile_sub = next(
+        s for s in hub_entry.subentries.values() if s.subentry_type == const.SUBENTRY_PROFILE
+    )
+    profile_device = registry.async_get_device_by_identifier(
+        (const.DOMAIN, profile_sub.subentry_id), hub_entry.entry_id
+    )
+    assert profile_device is not None
+    assert profile_device.config_subentry_id == profile_sub.subentry_id
+    assert profile_device.via_device_id == hub_device.id
+    assert profile_device.name == "Night" and profile_device.model == "Schedule profile"
+
     data = hub_entry.runtime_data
     assert data.hub.weather_entity == "weather.home"
     assert set(data.covers) == {cover_sub.subentry_id}
