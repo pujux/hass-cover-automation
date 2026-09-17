@@ -100,7 +100,7 @@
             "min_move_interval": "Minimum interval between shading moves",
             "name": "Name",
             "room_temperature_sensor": "Room temperature sensor",
-            "schedule_profile": "Schedule profile",
+            "schedule_profiles": "Schedule profiles",
             "shading_rule": "Shading rule",
             "tolerance_left": "Sun tolerance: left",
             "tolerance_right": "Sun tolerance: right",
@@ -114,6 +114,7 @@
             "azimuth": "Compass direction the window faces, 0–359°.",
             "confirm_window": "How long a commanded move may take before it counts as unconfirmed. Must exceed the cover's travel time.",
             "door_sensor": "While this door is open the cover never closes.",
+            "schedule_profiles": "Highest priority first. A profile that is switched off has no opinion, so the next one down decides.",
             "shading_rule": "How forecast and room temperature combine to decide shading."
           },
           "title": "Cover"
@@ -131,7 +132,7 @@
             "min_move_interval": "Minimum interval between shading moves",
             "name": "Name",
             "room_temperature_sensor": "Room temperature sensor",
-            "schedule_profile": "Schedule profile",
+            "schedule_profiles": "Schedule profiles",
             "shading_rule": "Shading rule",
             "tolerance_left": "Sun tolerance: left",
             "tolerance_right": "Sun tolerance: right",
@@ -145,6 +146,7 @@
             "azimuth": "Compass direction the window faces, 0–359°.",
             "confirm_window": "How long a commanded move may take before it counts as unconfirmed. Must exceed the cover's travel time.",
             "door_sensor": "While this door is open the cover never closes.",
+            "schedule_profiles": "Highest priority first. A profile that is switched off has no opinion, so the next one down decides.",
             "shading_rule": "How forecast and room temperature combine to decide shading."
           },
           "title": "Cover"

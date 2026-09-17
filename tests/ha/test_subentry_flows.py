@@ -5,6 +5,7 @@ from custom_components.cover_automation.engine.schedule import RuleAction
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
 
 from tests.ha.conftest import (
@@ -31,10 +32,26 @@ COVER_INPUT = {
     const.CONF_WIND_LOWER: 50,
     const.CONF_WIND_HOLD: 15,
     const.CONF_WIND_ACTION: "open",
-    const.CONF_SCHEDULE_PROFILE: const.PROFILE_NONE,
+    const.CONF_SCHEDULE_PROFILES: [],
     const.CONF_MIN_MOVE_INTERVAL: 10,
     const.CONF_CONFIRM_WINDOW: 120,
 }
+
+
+def register_profile_switch(hass: HomeAssistant, entry, subentry_id: str) -> str:
+    """The enable switch the cover picker selects profiles by, as the switch platform adds it."""
+    return (
+        er.async_get(hass)
+        .async_get_or_create(
+            "switch",
+            const.DOMAIN,
+            f"{subentry_id}_{const.PROFILE_ENABLED_KEY}",
+            config_entry=entry,
+            config_subentry_id=subentry_id,
+            suggested_object_id=f"profile_{subentry_id}",
+        )
+        .entity_id
+    )
 
 
 async def start(hass: HomeAssistant, entry, kind: str):
@@ -58,7 +75,8 @@ async def test_cover_subentry_created_with_units_and_profile_none(
     assert (
         sub.data[const.CONF_TEMPERATURE_UNIT] == "°C" and sub.data[const.CONF_WIND_UNIT] == "km/h"
     )
-    assert sub.data[const.CONF_SCHEDULE_PROFILE] == const.PROFILE_NONE
+    assert sub.data[const.CONF_SCHEDULE_PROFILES] == []
+    assert const.CONF_SCHEDULE_PROFILE not in sub.data
 
 
 async def test_cover_subentry_validation_errors(hass: HomeAssistant, hub_entry) -> None:
@@ -121,6 +139,7 @@ async def test_cover_reconfigure_keeps_identity_and_offers_profiles(
     prof_sub = next(
         s for s in hub_entry.subentries.values() if s.subentry_type == const.SUBENTRY_PROFILE
     )
+    switch_id = register_profile_switch(hass, hub_entry, prof_sub.subentry_id)
     result = await hass.config_entries.subentries.async_init(
         (hub_entry.entry_id, const.SUBENTRY_COVER),
         context={"source": config_entries.SOURCE_RECONFIGURE, "subentry_id": cover_sub.subentry_id},
@@ -131,15 +150,14 @@ async def test_cover_reconfigure_keeps_identity_and_offers_profiles(
         {
             **COVER_INPUT,
             const.CONF_NAME: "Bedroom East",
-            const.CONF_SCHEDULE_PROFILE: prof_sub.subentry_id,
+            const.CONF_SCHEDULE_PROFILES: [switch_id],
         },
     )
     assert result["type"] is FlowResultType.ABORT and result["reason"] == "reconfigure_successful"
     updated = hub_entry.subentries[cover_sub.subentry_id]
-    assert (
-        updated.title == "Bedroom East"
-        and updated.data[const.CONF_SCHEDULE_PROFILE] == prof_sub.subentry_id
-    )
+    assert updated.title == "Bedroom East" and updated.data[const.CONF_SCHEDULE_PROFILES] == [
+        prof_sub.subentry_id
+    ]
 
 
 async def test_cover_reconfigure_keeps_stored_temperature_unit_after_unit_system_change(
@@ -467,17 +485,22 @@ async def test_profile_empty_name_is_rejected(hass: HomeAssistant, hub_entry) ->
     assert result["errors"] == {const.CONF_NAME: "name_required"}
 
 
-async def test_cover_reconfigure_offers_none_when_profile_deleted(
+def _suggested(result, key: str):
+    marker = next(k for k in result["data_schema"].schema if str(k) == key)
+    return marker.description["suggested_value"]
+
+
+async def test_cover_reconfigure_drops_a_deleted_profile_from_the_picker(
     hass: HomeAssistant, hub_entry
 ) -> None:
-    """A cover referencing a schedule profile that was later deleted must fall back to
-    'none' in the reconfigure form default instead of an unselectable stale value."""
+    """A cover referencing a schedule profile that was later deleted must not render an
+    unselectable stale value; the reference is simply dropped."""
     set_weather(hass)
     set_cover(hass, "cover.bedroom")
     hass.config_entries.async_add_subentry(
         hub_entry,
         config_entries.ConfigSubentry(
-            **cover_subentry_data("cover.bedroom", schedule_profile="ghost_profile")
+            **cover_subentry_data("cover.bedroom", schedule_profiles=["ghost_profile"])
         ),
     )
     cover_sub = next(iter(hub_entry.subentries.values()))
@@ -486,15 +509,90 @@ async def test_cover_reconfigure_offers_none_when_profile_deleted(
         context={"source": config_entries.SOURCE_RECONFIGURE, "subentry_id": cover_sub.subentry_id},
     )
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "reconfigure"
-    marker = next(k for k in result["data_schema"].schema if str(k) == const.CONF_SCHEDULE_PROFILE)
-    assert marker.default() == const.PROFILE_NONE
+    assert _suggested(result, const.CONF_SCHEDULE_PROFILES) == []
+
+    result = await hass.config_entries.subentries.async_configure(result["flow_id"], COVER_INPUT)
+    assert result["type"] is FlowResultType.ABORT and result["reason"] == "reconfigure_successful"
+    updated = hub_entry.subentries[cover_sub.subentry_id]
+    assert updated.data[const.CONF_SCHEDULE_PROFILES] == []
+
+
+async def test_cover_stores_two_profiles_in_picker_order(hass: HomeAssistant, hub_entry) -> None:
+    """The picker is ordered: what the user dragged into first place is stored first."""
+    set_weather(hass)
+    set_cover(hass, "cover.bedroom")
+    for name in ("Night", "Vacation"):
+        hass.config_entries.async_add_subentry(
+            hub_entry, config_entries.ConfigSubentry(**profile_subentry_data(name))
+        )
+    night, vacation = (
+        s for s in hub_entry.subentries.values() if s.subentry_type == const.SUBENTRY_PROFILE
+    )
+    night_switch = register_profile_switch(hass, hub_entry, night.subentry_id)
+    vacation_switch = register_profile_switch(hass, hub_entry, vacation.subentry_id)
+
+    result = await start(hass, hub_entry, const.SUBENTRY_COVER)
+    schema_key = next(
+        k for k in result["data_schema"].schema if str(k) == const.CONF_SCHEDULE_PROFILES
+    )
+    config = result["data_schema"].schema[schema_key].config
+    assert config["multiple"] is True and config["reorder"] is True
+    assert set(config["include_entities"]) == {night_switch, vacation_switch}
 
     result = await hass.config_entries.subentries.async_configure(
-        result["flow_id"], {**COVER_INPUT, const.CONF_SCHEDULE_PROFILE: marker.default()}
+        result["flow_id"],
+        {**COVER_INPUT, const.CONF_SCHEDULE_PROFILES: [vacation_switch, night_switch]},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    cover_sub = next(
+        s for s in hub_entry.subentries.values() if s.subentry_type == const.SUBENTRY_COVER
+    )
+    assert cover_sub.data[const.CONF_SCHEDULE_PROFILES] == [
+        vacation.subentry_id,
+        night.subentry_id,
+    ]
+    cfg, _bind = config_map.cover_config(cover_sub, config_map.hub_config(hub_entry))
+    assert cfg.profile_ids == (vacation.subentry_id, night.subentry_id)
+
+
+async def test_reconfiguring_a_legacy_cover_writes_the_new_key(
+    hass: HomeAssistant, hub_entry
+) -> None:
+    """A pre-0.5 cover renders its single profile in the picker and is rewritten as a list."""
+    set_weather(hass)
+    set_cover(hass, "cover.bedroom")
+    hass.config_entries.async_add_subentry(
+        hub_entry, config_entries.ConfigSubentry(**profile_subentry_data("Night"))
+    )
+    night = next(
+        s for s in hub_entry.subentries.values() if s.subentry_type == const.SUBENTRY_PROFILE
+    )
+    night_switch = register_profile_switch(hass, hub_entry, night.subentry_id)
+    hass.config_entries.async_add_subentry(
+        hub_entry,
+        config_entries.ConfigSubentry(
+            **cover_subentry_data("cover.bedroom", schedule_profile=night.subentry_id)
+        ),
+    )
+    cover_sub = next(
+        s for s in hub_entry.subentries.values() if s.subentry_type == const.SUBENTRY_COVER
+    )
+    # read backwards compatibly before anything is rewritten
+    legacy_cfg, _ = config_map.cover_config(cover_sub, config_map.hub_config(hub_entry))
+    assert legacy_cfg.profile_ids == (night.subentry_id,)
+
+    result = await hass.config_entries.subentries.async_init(
+        (hub_entry.entry_id, const.SUBENTRY_COVER),
+        context={"source": config_entries.SOURCE_RECONFIGURE, "subentry_id": cover_sub.subentry_id},
+    )
+    assert _suggested(result, const.CONF_SCHEDULE_PROFILES) == [night_switch]
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {**COVER_INPUT, const.CONF_SCHEDULE_PROFILES: [night_switch]}
     )
     assert result["type"] is FlowResultType.ABORT and result["reason"] == "reconfigure_successful"
     updated = hub_entry.subentries[cover_sub.subentry_id]
-    assert updated.data[const.CONF_SCHEDULE_PROFILE] == const.PROFILE_NONE
+    assert updated.data[const.CONF_SCHEDULE_PROFILES] == [night.subentry_id]
+    assert const.CONF_SCHEDULE_PROFILE not in updated.data
 
 
 async def test_profile_reconfigure_prefills_and_updates(hass: HomeAssistant, hub_entry) -> None:

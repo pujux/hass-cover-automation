@@ -17,7 +17,10 @@ PLATFORMS: Final[list[Platform]] = [
 
 SUBENTRY_COVER: Final = "cover"
 SUBENTRY_PROFILE: Final = "profile"
-PROFILE_NONE: Final = "none"
+PROFILE_NONE: Final = "none"  # pre-0.5 "no schedule" sentinel, still readable
+# Translation key and unique-id suffix of a profile's enable switch: the cover flow picks
+# profiles by that entity, so both sides must agree on it.
+PROFILE_ENABLED_KEY: Final = "profile_enabled"
 
 # Hub entry data (immutable identity of the hub)
 CONF_WEATHER_ENTITY: Final = "weather_entity"

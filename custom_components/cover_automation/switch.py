@@ -10,6 +10,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from . import const
 from .entity import ControllerProtocol, CoverEntityBase, HubEntity, ProfileEntityBase
 
 
@@ -93,7 +94,7 @@ class ProfileEnabledSwitch(ProfileEntityBase, SwitchEntity):
     def __init__(
         self, entry: ConfigEntry, controller: ControllerProtocol, subentry_id: str
     ) -> None:
-        super().__init__(entry, controller, subentry_id, "profile_enabled")
+        super().__init__(entry, controller, subentry_id, const.PROFILE_ENABLED_KEY)
 
     @property
     def is_on(self) -> bool:

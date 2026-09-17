@@ -7,6 +7,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.components.cover import CoverEntityFeature
+from homeassistant.components.switch.const import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.weather.const import WeatherEntityFeature
 from homeassistant.config_entries import (
     ConfigEntry,
@@ -20,11 +21,12 @@ from homeassistant.config_entries import (
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import section
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 from homeassistant.util.unit_conversion import TemperatureConverter
 
 from . import const
-from .config_map import parse_time, quiet_from_data, rules_from_data
+from .config_map import parse_time, profile_ids, quiet_from_data, rules_from_data
 from .engine.model import ShadingRule, WindAction
 from .engine.schedule import Profile, RuleAction, TimeMode
 from .engine.schedule import validate as validate_rules
@@ -338,17 +340,44 @@ def _select(options: list[str], translation_key: str) -> selector.SelectSelector
     )
 
 
+def profile_switch_entity_ids(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, str]:
+    """Profile subentry id -> its enable switch entity id, in subentry order.
+
+    A profile whose switch is not in the registry yet (the entry has never been set up since
+    the profile was added) is left out; it simply cannot be picked until it exists.
+    """
+    registry = er.async_get(hass)
+    found: dict[str, str] = {}
+    for sub in entry.get_subentries_of_type(const.SUBENTRY_PROFILE):
+        entity_id = registry.async_get_entity_id(
+            SWITCH_DOMAIN, const.DOMAIN, f"{sub.subentry_id}_{const.PROFILE_ENABLED_KEY}"
+        )
+        if entity_id is not None:
+            found[sub.subentry_id] = entity_id
+    return found
+
+
+def profile_ids_from_entities(hass: HomeAssistant, entity_ids: Any) -> list[str]:
+    """The picker's entity ids back to subentry ids, in the picked order.
+
+    An entity that no longer resolves (deleted profile, renamed integration) is dropped
+    rather than stored as a dangling reference.
+    """
+    registry = er.async_get(hass)
+    out: list[str] = []
+    for entity_id in entity_ids or ():
+        entry = registry.async_get(str(entity_id))
+        if entry is not None and entry.config_subentry_id is not None:
+            out.append(entry.config_subentry_id)
+    return out
+
+
 def cover_schema(
     hass: HomeAssistant, entry: ConfigEntry, defaults: Mapping[str, Any], unit: str
 ) -> vol.Schema:
     d = defaults
     hub_has_wind = bool(entry.data.get(const.CONF_WIND_SENSOR))
-    profiles = entry.get_subentries_of_type(const.SUBENTRY_PROFILE)
-    profile_ids = {p.subentry_id for p in profiles}
-    profile_options: list[selector.SelectOptionDict] = [
-        {"value": const.PROFILE_NONE, "label": "—"},
-        *({"value": p.subentry_id, "label": p.title} for p in profiles),
-    ]
+    profile_entities = profile_switch_entity_ids(hass, entry)
 
     def dflt(key: str, fallback: Any) -> Any:
         return d.get(key, fallback)
@@ -429,18 +458,22 @@ def cover_schema(
                 ): _select(_WIND_ACTIONS, "wind_action"),
             }
         )
-    stored_profile = dflt(const.CONF_SCHEDULE_PROFILE, const.PROFILE_NONE)
-    if stored_profile != const.PROFILE_NONE and stored_profile not in profile_ids:
-        # The stored profile subentry was deleted; fall back to "none" so the selector
-        # always has a valid, selectable default (spec §3).
-        stored_profile = const.PROFILE_NONE
+    # The stored ids as entity ids, in priority order; ids whose profile (or whose switch) is
+    # gone are dropped, so the picker never shows an unselectable value.
+    suggested_profiles = [
+        profile_entities[pid] for pid in profile_ids(d) if pid in profile_entities
+    ]
     fields.update(
         {
-            vol.Required(
-                const.CONF_SCHEDULE_PROFILE,
-                default=stored_profile,
-            ): selector.SelectSelector(
-                {"options": profile_options, "mode": selector.SelectSelectorMode.DROPDOWN}
+            vol.Optional(
+                const.CONF_SCHEDULE_PROFILES,
+                description={"suggested_value": suggested_profiles},
+            ): selector.EntitySelector(
+                {
+                    "multiple": True,
+                    "reorder": True,
+                    "include_entities": list(profile_entities.values()),
+                }
             ),
             vol.Required(
                 const.CONF_MIN_MOVE_INTERVAL,
@@ -517,6 +550,12 @@ class CoverSubentryFlow(ConfigSubentryFlow):
             if not errors:
                 data = _clean_optional_entities(
                     user_input, (const.CONF_ROOM_SENSOR, const.CONF_DOOR_SENSOR)
+                )
+                # The picker speaks entity ids; the stored shape is subentry ids in the
+                # picked order. The pre-0.5 single-profile key is never written again.
+                data.pop(const.CONF_SCHEDULE_PROFILE, None)
+                data[const.CONF_SCHEDULE_PROFILES] = profile_ids_from_entities(
+                    self.hass, user_input.get(const.CONF_SCHEDULE_PROFILES)
                 )
                 cover_state = self.hass.states.get(str(data[const.CONF_COVER_ENTITY]))
                 friendly = cover_state.name if cover_state else str(data[const.CONF_COVER_ENTITY])
