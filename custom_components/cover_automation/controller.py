@@ -76,6 +76,11 @@ EVENT_ACTION = f"{const.DOMAIN}_action"
 FALLBACK_TICK = timedelta(minutes=5)
 FORECAST_REFRESH = timedelta(hours=1)
 FORECAST_THROTTLE = timedelta(minutes=10)
+# How long a remembered sun position may stand in for a missing `sun.sun` (§2). Beyond this
+# the position is stale enough to matter: a frozen daylight elevation would keep the night
+# guard from ever firing (a room-temperature change could open a cover at 2 a.m.), and a
+# frozen night elevation would hold a cover shut through the following day.
+SUN_CACHE_TTL = timedelta(minutes=30)
 
 
 def _jsonable(value: Any) -> Any:
@@ -133,10 +138,14 @@ class CoverAutomationController:
         self._cover_timers: dict[str, CALLBACK_TYPE] = {}
         self._unsubs: list[CALLBACK_TYPE] = []
         self._last_forecast_fetch: datetime | None = None
-        # Last known `(azimuth, elevation)`: a `sun.sun` blip must not pause wind, frost and
-        # door protection, so evaluation falls back to it while the entity is away (§2).
+        # Last known `(azimuth, elevation)` and when it was read: a `sun.sun` blip must not
+        # pause wind, frost and door protection, so evaluation falls back to it -- but only
+        # for `SUN_CACHE_TTL` -- while the entity is away (§2).
         self._last_sun: tuple[float, float] | None = None
+        self._last_sun_at: datetime | None = None
         self._watched: dict[str, set[str] | None] = {}
+        # Fixed for this controller's lifetime: a configuration change reloads the entry.
+        self._optional_entities = repairs.optional_entity_ids(hub, self._covers)
         self._problem = False
         # One lock per cover: an evaluation (and its blocking service call) only ever
         # serialises that cover, so a slow device cannot stall the others or `async_stop`.
@@ -172,6 +181,7 @@ class CoverAutomationController:
             cover_entity=bind.cover_entity,
             status=Status.IDLE if p.enabled else Status.DISABLED,
             actual_state=actual.value,
+            last_engine_move=p.last_send_at,
             enabled=p.enabled,
             mode=p.mode,
         )
@@ -397,11 +407,7 @@ class CoverAutomationController:
         # Hub-level bookkeeping stays outside the per-cover locks.
         self._hub_signals.update(at)
         self._update_hub_repairs(at, fresh_sun)
-        if fresh_sun is not None:
-            self._last_sun = fresh_sun
-        # Only shading opinions go stale on a cached position; the protection layers must keep
-        # running. Skip the covers entirely only while no position was ever known.
-        sun = self._last_sun
+        sun = self._sun_within_ttl(fresh_sun, at)
         if sun is not None:
             hub_sig = self._hub_signals.signals(at, self._store.data, sun[1])
             for cover_id in ids:
@@ -420,6 +426,23 @@ class CoverAutomationController:
         self._update_profile_repairs(at)
         self._publish()
         self._store.schedule_save()
+
+    def _sun_within_ttl(
+        self, fresh: tuple[float, float] | None, now: datetime
+    ) -> tuple[float, float] | None:
+        """The position to evaluate on: the fresh one, or a recent enough remembered one.
+
+        Only shading opinions go stale on a remembered position, so the protection layers keep
+        running through a `sun.sun` blip. Past `SUN_CACHE_TTL` -- and while no position was
+        ever known -- no cover is evaluated at all; the `sun_missing` repair is raised either
+        way from the fresh read.
+        """
+        if fresh is not None:
+            self._last_sun, self._last_sun_at = fresh, now
+            return fresh
+        if self._last_sun_at is not None and now - self._last_sun_at <= SUN_CACHE_TTL:
+            return self._last_sun
+        return None
 
     async def _sync_actual(self, cover_id: str, now: datetime) -> CoverState:
         _cfg, bind = self._covers[cover_id]
@@ -707,7 +730,7 @@ class CoverAutomationController:
         (`async_at_started`).
         """
         missing: list[str] = []
-        for entity_id in repairs.optional_entity_ids(self.hub, self._covers):
+        for entity_id in self._optional_entities:
             absent = self.hass.states.get(entity_id) is None
             repairs.set_issue(
                 self.hass,

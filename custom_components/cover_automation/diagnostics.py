@@ -24,5 +24,6 @@ async def async_get_config_entry_diagnostics(
             for s in entry.subentries.values()
         ],
         "covers": controller.snapshot() if controller is not None and started else {},
+        "missing_entities": list(data.missing_entities),
         "store": data.store.data.to_dict(),
     }

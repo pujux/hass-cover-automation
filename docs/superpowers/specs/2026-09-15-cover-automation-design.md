@@ -1,7 +1,7 @@
 # Cover Automation Integration — Design Spec
 
 Date: 2026-09-15. Revision 3.5 (after two review rounds, the engine implementation's whole-branch review, the HA-binding final fix wave, see `docs/reviews/`, and the engine follow-up that made in-flight duplicate suppression a gate condition, §1.3 gate 7, and the v0.2.0 robustness follow-up: live missing-entity repairs, a persisted minimum-interval clock and a cached sun position).
-Related: `docs/design-decisions.md` (decision log, #1–#31), `docs/feature-selection.md`,
+Related: `docs/design-decisions.md` (decision log, #1–#32), `docs/feature-selection.md`,
 `docs/reference/smart-cover-automation-analysis.md`.
 
 ## 0. Scope
@@ -247,9 +247,9 @@ hour fires at the first valid minute after it; in a repeated hour it fires once.
   (HA updates them every 2–4 min in daylight); `sun.sun` is validated at setup (§5). Seed
   at startup/reload with the strict test. The margin is a release margin, not chatter
   protection; chatter protection is the sunny debounce. The controller keeps the last
-  known position through `sun.sun` outages and evaluates on it: only shading opinions may
-  then be stale, the protection layers keep running. Covers are skipped only until a first
-  position is known.
+  known position for up to 30 minutes through `sun.sun` outages and evaluates on it: only
+  shading opinions may then be stale, the protection layers keep running. Beyond that -- and
+  until a first position is known -- no cover is evaluated until the sun entity returns.
 - **Sunny**: weather condition ∈ configurable set (default `sunny`, `partlycloudy`),
   debounced: on after continuously true for `sunny_on_delay` (10 min), off after
   continuously false for `sunny_off_delay` (20 min). Seeded at startup from the current

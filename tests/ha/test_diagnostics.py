@@ -28,3 +28,4 @@ async def test_diagnostics_without_controller(hass: HomeAssistant, hub_entry):
     )
     assert set(diag["store"]) >= {"covers", "latch", "shading_mode"}
     assert "covers" in diag
+    assert diag["missing_entities"] == hub_entry.runtime_data.missing_entities == []

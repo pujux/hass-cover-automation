@@ -925,3 +925,56 @@ async def test_protection_keeps_running_through_a_sun_outage(hass, hub_entry, co
         assert reg.async_get_issue(const.DOMAIN, issue_id) is None
     finally:
         await controller.async_stop()
+
+
+async def test_sun_cache_expires_and_stops_evaluating(hass, hub_entry, cover_services, freezer):
+    """R3: a stale position would keep a daylight elevation, so the cache is bounded."""
+    controller, _sub_id = await start_controller(
+        hass,
+        hub_entry,
+        cover_overrides={
+            const.CONF_WIND_ENABLED: True,
+            const.CONF_WIND_UPPER: 60,
+            const.CONF_WIND_LOWER: 50,
+            const.CONF_WIND_UNIT: "km/h",
+        },
+    )
+    try:
+        set_cover(hass, "cover.bedroom", state="closed", position=0)
+        await hass.async_block_till_done()
+        hass.states.async_remove("sun.sun")
+        await hass.async_block_till_done()
+
+        freezer.tick(timedelta(minutes=31))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+        set_sensor(hass, "sensor.wind", 75.0, unit="km/h", device_class="wind_speed")
+        await hass.async_block_till_done()
+        assert not cover_services["open"]  # beyond the TTL no cover is evaluated at all
+        assert (
+            ir.async_get(hass).async_get_issue(const.DOMAIN, f"sun_missing_{hub_entry.entry_id}")
+            is not None
+        )
+    finally:
+        await controller.async_stop()
+
+
+async def test_start_without_a_sun_position_skips_every_cover(hass, hub_entry, cover_services):
+    """The never-known branch: nothing to fall back on, so no cover is evaluated."""
+    controller, sub_id = await build_controller(hass, hub_entry)
+    hass.states.async_remove("sun.sun")
+    with patch(
+        "custom_components.cover_automation.controller.async_fetch_today",
+        AsyncMock(return_value=HOT),
+    ):
+        await controller.async_start()
+        await hass.async_block_till_done()
+    try:
+        assert not cover_services["close"] and not cover_services["open"]
+        assert controller.cover_views[sub_id].winning_layer == "none"
+        assert (
+            ir.async_get(hass).async_get_issue(const.DOMAIN, f"sun_missing_{hub_entry.entry_id}")
+            is not None
+        )
+    finally:
+        await controller.async_stop()

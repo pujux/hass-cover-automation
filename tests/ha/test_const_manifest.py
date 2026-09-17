@@ -27,7 +27,7 @@ def test_manifest_keys() -> None:
     rest = list(data)[2:]
     assert rest == sorted(rest), "hassfest: remaining manifest keys alphabetical"
     assert data["domain"] == const.DOMAIN
-    assert data["version"] == "0.1.0"
+    assert data["version"] == "0.2.0"
     repo = "https://github.com/pujux/hass-cover-automation"
     assert data["codeowners"] == ["@pujux"]
     assert data["documentation"] == repo
