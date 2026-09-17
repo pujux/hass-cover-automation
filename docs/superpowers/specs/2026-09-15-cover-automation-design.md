@@ -1,7 +1,7 @@
 # Cover Automation Integration — Design Spec
 
-Date: 2026-09-15. Revision 3.5 (after two review rounds, the engine implementation's whole-branch review, the HA-binding final fix wave, see `docs/reviews/`, and the engine follow-up that made in-flight duplicate suppression a gate condition, §1.3 gate 7, and the v0.2.0 robustness follow-up: live missing-entity repairs, a persisted minimum-interval clock and a cached sun position).
-Related: `docs/design-decisions.md` (decision log, #1–#32), `docs/feature-selection.md`,
+Date: 2026-09-15. Revision 3.6 (after two review rounds, the engine implementation's whole-branch review, the HA-binding final fix wave, see `docs/reviews/`, and the engine follow-up that made in-flight duplicate suppression a gate condition, §1.3 gate 7, the v0.2.0 robustness follow-up: live missing-entity repairs, a persisted minimum-interval clock and a cached sun position, and the v0.3.0 `release` rule action, decision 33).
+Related: `docs/design-decisions.md` (decision log, #1–#33), `docs/feature-selection.md`,
 `docs/reference/smart-cover-automation-analysis.md`.
 
 ## 0. Scope
@@ -87,7 +87,7 @@ bottom; the first layer with an opinion sets the desired state.
    `leave_alone` (never close on a dead sensor; never force open either) plus a repair
    issue. Nothing below this layer may close a cover on an open door.
 4. **Quiet hours** (from the cover's profile) → `leave_alone`.
-5. **Schedule** (decision 13). Two rule kinds:
+5. **Schedule** (decisions 13 and 33). Three rule kinds:
    - A **close rule** that fired at T holds `closed` until the next rule of the profile
      fires or until `manual_move_at > T` (decision 22; `manual_move_at` is written only by
      manual moves and never cleared, so a release is sticky until the next rule).
@@ -97,13 +97,18 @@ bottom; the first layer with an opinion sets the desired state.
      is satisfied and has no further opinion, so a later shading close is not undone
      (decision 24). The satisfied marker is runtime-only; a restart within the 15-minute
      window while the cover is closed may re-open it once.
+   - A **release rule** that fired at T ends the hold without an opinion of its own
+     (`leave_alone`): the layers below decide, so shading may keep the cover closed and
+     otherwise the engine reopens it because it owns the closed state the schedule created.
+     Unlike an open rule it forces nothing, so shading never has to undo it (decision 33).
    - Any rule firing clears `dam` and `dam_layer` for every cover of the profile (schedules
      are authoritative, decision 10), even when the desired state does not change.
    - Two consecutive close rules are legal and act as a re-close (documented escape hatch).
    - A fixed-time rule inside its own profile's quiet hours is rejected at config time. A
      sun-relative rule that lands inside quiet hours on a given day is **clamped** (close
-     rules to one minute before quiet hours start, open rules to quiet hours end); it is
-     skipped that day with a repair issue only if no valid clamp exists (decision 23).
+     rules to one minute before quiet hours start, open and release rules to quiet hours
+     end); it is skipped that day with a repair issue only if no valid clamp exists
+     (decision 23).
 6. **Shading** (decision 14) — only while sun elevation > 0, mode `auto` or `dark_only`,
    hub shading mode ≠ `off`. Otherwise `leave_alone`.
    Per-cover `shading_rule`:
@@ -337,10 +342,11 @@ Enabled and mode are runtime state (§5), not subentry data.
 
 **Schedule profile subentry**: `name`; `rules` stored as a list, presented as four collapsed
 sections `rule_1`…`rule_4` with all fields optional and cross-field validation in the step
-handler: `{action: close|open, time_mode: fixed|sunrise|sunset, time (fixed) or
+handler: `{action: close|open|release, time_mode: fixed|sunrise|sunset, time (fixed) or
 offset_minutes (sun-relative), earliest?, latest? (clamps for sun-relative rules)}`;
 optional `quiet_hours {start, end}` (may span midnight). Validation: fixed rule times
-outside quiet hours; `fixed` requires `time`, sun-relative requires `offset_minutes`.
+outside quiet hours; `fixed` requires `time`, sun-relative requires `offset_minutes`; a
+`release` rule needs a `close` rule in the same profile to release.
 
 **Entity references** (`cover_entity`, `door_sensor`, `room_temperature_sensor`, hub
 sensors) are followed automatically: the integration subscribes to
@@ -509,9 +515,9 @@ announced), update-listener + reloading flows (2026.12), `TargetSelectorData` �
 **Testing:** table-driven unit tests for `engine/` covering: layer precedence (frost over
 wind over door over quiet hours over schedule over shading); mode table; every hysteresis,
 debounce, dwell and latch edge including seeding; override lifecycle a–e in both reopening
-modes, including which sends clear `dam`; schedule close/open rule semantics as state tests,
-sticky releases, re-close, quiet-hour rejection and clamping; door bypass rule; classification
-with tolerance, `partial`, `moving`, pending match / contrary / late match / expiry, and the
+modes, including which sends clear `dam`; schedule close/open/release rule semantics as
+state tests, sticky releases, re-close, quiet-hour rejection and clamping; door bypass rule;
+classification with tolerance, `partial`, `moving`, pending match / contrary / late match / expiry, and the
 "position-only cover without travel flags, 45 s close" case; reconcile cases (first setup,
 completed-during-downtime, user-closed-then-restart, restart during frost with a live
 override). The reviewer scenarios (`docs/reviews/*behavior*.md`, scenarios a–n plus N1–N6)

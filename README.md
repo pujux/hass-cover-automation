@@ -29,8 +29,8 @@ provides a daily forecast.
    and an outdoor temperature sensor, then the thresholds. The optional *sunny* and *hot day*
    override entities may be a binary sensor, an `input_boolean` helper or a switch.
 2. **Schedule profiles** (optional): Add a *schedule profile* subentry with up to four rules
-   (close at a time or relative to sunset, open once at a time or relative to sunrise) and
-   optional quiet hours.
+   (close at a time or relative to sunset, open once at a time or relative to sunrise, or
+   release an earlier close back to the automation) and optional quiet hours.
 3. **Covers**: Add one *cover* subentry per cover: window azimuth and sun tolerances, shading
    rule, room temperature sensor, door sensor, wind thresholds and a schedule profile.
 
@@ -47,8 +47,9 @@ first one with an opinion wins:
    there until the wind stays below the lower threshold for the hold time.
 3. **Door** — while the door/window sensor of a cover is open, the cover is not closed.
 4. **Quiet hours** — inside a profile's quiet hours the automation does not move the cover.
-5. **Schedule** — a profile's close rule holds the cover closed until the next open rule; an
-   open rule is one-shot and gives up once the cover is open or its window has passed.
+5. **Schedule** — a profile's close rule holds the cover closed until the next rule; an
+   open rule is one-shot and gives up once the cover is open or its window has passed; a
+   release rule ends the hold without moving anything, leaving the decision to shading.
 6. **Shading** — on a hot day, while the sun actually hits the window and the room calls for
    it, the cover closes; it reopens when the sun leaves the window or the day cools off.
 
@@ -109,6 +110,14 @@ additionally raises the integration's own logger to debug level, which logs the 
 per-evaluation reasoning to the Home Assistant log.
 
 ## Release notes
+
+### v0.3.0
+
+- Schedule rules have a third action, **Release to automation**. A close rule can now hand
+  the cover back to the automation at a chosen time instead of being followed by an open
+  rule: nothing is forced, so shading keeps the cover closed if the morning is hot and
+  sunny, and otherwise the cover opens. Bedrooms that close at sunset and should not be
+  woken by the morning sun get a `close` at sunset + 60 min and a `release` at 08:00.
 
 ### v0.2.0
 
