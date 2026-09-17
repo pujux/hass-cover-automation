@@ -26,8 +26,10 @@ provides a daily forecast.
 ## Configure
 
 1. **Hub**: pick your weather entity (must provide a daily forecast), optionally a wind sensor
-   and an outdoor temperature sensor, then the thresholds. The optional *sunny* and *hot day*
-   override entities may be a binary sensor, an `input_boolean` helper or a switch.
+   and an outdoor temperature sensor, then the thresholds. The optional *sunny*, *hot day* and
+   *wind protection* override entities may be a binary sensor, an `input_boolean` helper or a
+   switch. The wind override only forces: while it is on every cover with wind protection
+   enabled takes its wind action, and while it is off the wind sensor decides as usual.
 2. **Schedule profiles** (optional): Add a *schedule profile* subentry with up to four rules
    (close at a time or relative to sunset, open once at a time or relative to sunrise, or
    release an earlier close back to the automation) and optional quiet hours.
@@ -44,7 +46,8 @@ first one with an opinion wins:
 
 1. **Frost** — below the frost threshold nothing moves at all, in either direction.
 2. **Wind** — above the per-cover upper threshold the cover takes its wind action and is held
-   there until the wind stays below the lower threshold for the hold time.
+   there until the wind stays below the lower threshold for the hold time. The hub's wind
+   protection override entity forces the same thing while it is on.
 3. **Door** — while the door/window sensor of a cover is open, the cover is not closed.
 4. **Quiet hours** — inside a profile's quiet hours the automation does not move the cover.
 5. **Schedule** — a profile's close rule holds the cover closed until the next rule; an
@@ -110,6 +113,14 @@ additionally raises the integration's own logger to debug level, which logs the 
 per-evaluation reasoning to the Home Assistant log.
 
 ## Release notes
+
+### v0.4.0
+
+- A hub-level **wind protection override entity**. Point it at a binary sensor, an
+  `input_boolean` helper or a switch, and while it is on every cover with wind protection
+  enabled takes its wind action regardless of what the wind sensor says — a manual storm
+  switch, and the way to keep an existing "Windschutz" helper in charge. It only forces:
+  while it is off the wind sensor decides as before, so real wind is still handled.
 
 ### v0.3.0
 

@@ -1,7 +1,7 @@
 # Cover Automation Integration — Design Spec
 
-Date: 2026-09-15. Revision 3.6 (after two review rounds, the engine implementation's whole-branch review, the HA-binding final fix wave, see `docs/reviews/`, and the engine follow-up that made in-flight duplicate suppression a gate condition, §1.3 gate 7, the v0.2.0 robustness follow-up: live missing-entity repairs, a persisted minimum-interval clock and a cached sun position, and the v0.3.0 `release` rule action, decision 33).
-Related: `docs/design-decisions.md` (decision log, #1–#33), `docs/feature-selection.md`,
+Date: 2026-09-15. Revision 3.7 (after two review rounds, the engine implementation's whole-branch review, the HA-binding final fix wave, see `docs/reviews/`, and the engine follow-up that made in-flight duplicate suppression a gate condition, §1.3 gate 7, the v0.2.0 robustness follow-up: live missing-entity repairs, a persisted minimum-interval clock and a cached sun position, the v0.3.0 `release` rule action, decision 33, and the v0.4.0 wind protection override entity, decision 34).
+Related: `docs/design-decisions.md` (decision log, #1–#34), `docs/feature-selection.md`,
 `docs/reference/smart-cover-automation-analysis.md`.
 
 ## 0. Scope
@@ -270,7 +270,8 @@ hour fires at the first valid minute after it; in a repeated hour it fires once.
   keeps the previous values and raises the weather repair issue after the grace period.
   `hot_day = max ≥ hot_high AND (NOT hot_low_enabled OR min ≥ hot_low)`.
 - **Override entities**: optional `sunny_override_entity`, `hot_override_entity`; if set,
-  their on/off replaces the computed value (unavailable → unknown).
+  their on/off replaces the computed value (unavailable → unknown). The separate
+  `wind_override_entity` only forces, see the wind bullet below.
 - **Room temperature** (per cover, optional): `room_cold = temp < comfort_floor`,
   `room_hot = temp ≥ comfort_ceiling`, 0.5 K hysteresis and a 10-minute dwell on both
   transitions. Seeded at startup/reload from the current reading with the hysteresis band
@@ -280,7 +281,12 @@ hour fires at the first valid minute after it; in a repeated hour it fires once.
 - **Wind**: one hub sensor (speed or gust). Per cover: `wind_enabled`, `wind_upper`,
   `wind_lower`, `wind_hold` (15 min), `wind_action` (open|hold). Activation at value ≥
   upper; release after value < lower continuously for the hold time. Sensor unavailable →
-  `wind_active` frozen at its last value + repair issue.
+  `wind_active` frozen at its last value + repair issue. The optional hub-level
+  `wind_override_entity` forces the issue: while it is on, `wind_active` is true for every
+  cover with `wind_enabled` regardless of the sensor (status attribute `wind_state =
+  forced`), each cover keeping its own `wind_action`; off, unavailable or not configured,
+  the computed value applies. It never disables protection, and the computed value keeps
+  being tracked underneath so the release is correct the moment it goes off (decision 34).
 - **Frost**: outdoor temperature from a sensor or the weather entity's `temperature`
   attribute. `frost_active` at ≤ threshold (default 0 °C), release at > threshold + 1 K.
   Source unavailable → last value held for `weather_grace`, then `unknown`; the last known
@@ -324,8 +330,8 @@ subentries); `outdoor_temperature_source` (sensor entity; default = weather enti
 temperature attribute); `frost_threshold` (0 °C); `sunny_conditions`; `sunny_on_delay`
 (10 min); `sunny_off_delay` (20 min); `weather_grace` (30 min); `hot_high` (24 °C);
 `hot_low` (13 °C) + `hot_low_enabled` (true); `sunny_override_entity`,
-`hot_override_entity` (optional); `sun_release_margin` (2°); `open_closed_tolerance` (5 %);
-`override_dwell` (30 min).
+`hot_override_entity`, `wind_override_entity` (optional); `sun_release_margin` (2°);
+`open_closed_tolerance` (5 %); `override_dwell` (30 min).
 
 **Cover subentry** (one per cover): `cover_entity` (required; feature check OPEN+CLOSE or
 SET_POSITION runs in the flow when the cover currently reports a state, otherwise the cover
